@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Money 量化分析終端 V8.0</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #0f172a; /* Tailwind slate-900 */
+            color: #e2e8f0; /* Tailwind slate-200 */
+            font-family: 'Courier New', Courier, monospace;
+        }
+        .terminal-container {
+            background-color: #1e293b; /* Tailwind slate-800 */
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+            border: 1px solid #334155;
+        }
+        .highlight-green { color: #22c55e; } /* Tailwind green-500 */
+        .highlight-red { color: #ef4444; }   /* Tailwind red-500 */
+        .highlight-yellow { color: #eab308; } /* Tailwind yellow-500 */
+        .highlight-blue { color: #3b82f6; }  /* Tailwind blue-500 */
+        .highlight-cyan { color: #06b6d4; }  /* Tailwind cyan-500 */
+        .highlight-pink { color: #ec4899; }  /* Tailwind pink-500 */
+        
+        .loading {
+            display: inline-block;
+            overflow: hidden;
+            height: 1.3em;
+            margin-top: -0.3em;
+            vertical-align: text-bottom;
+        }
+        .loading::after {
+            display: inline-table;
+            white-space: pre;
+            text-align: left;
+            content: "...\n..\n.\n";
+            animation: spin 1.5s steps(4) infinite;
+        }
+        @keyframes spin { to { transform: translateY(-4.5em); } }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-8 flex flex-col items-center">
+
+    <div class="w-full max-w-4xl">
+        <!-- 頂部控制面板 -->
+        <div class="mb-4 flex flex-col md:flex-row gap-4 justify-between items-center bg-slate-800 p-4 rounded-lg border border-slate-700">
+            <div>
+                <h1 class="text-xl md:text-2xl font-bold highlight-cyan">◆ 賽事量化終端 V8.0 <span class="text-sm text-slate-400 font-normal">亞盤思維與強隊校準版</span></h1>
+            </div>
+            <div class="flex gap-2 w-full md:w-auto">
+                <input type="text" id="matchIdInput" placeholder="輸入賽事 ID (如 2789462)" 
+                    class="w-full md:w-64 px-3 py-2 bg-slate-900 border border-slate-600 rounded text-slate-200 focus:outline-none focus:border-cyan-500"
+                    onkeypress="handleKeyPress(event)">
+                <button onclick="runAnalysis()" 
+                    class="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded transition duration-200 whitespace-nowrap">
+                    執行分析
+                </button>
+            </div>
+        </div>
+
+        <!-- 終端機輸出區域 -->
+        <div class="terminal-container rounded-lg p-4 md:p-6 min-h-[500px] overflow-y-auto text-sm md:text-base leading-relaxed" id="outputConsole">
+            <div class="highlight-pink font-bold">==================================================</div>
+            <div class="highlight-pink font-bold">*** 歡迎使用 Smart Money 量化盯盤系統 V8 (Web版) ***</div>
+            <div class="highlight-cyan mb-2">提示: 堅守 70 分防禦底線，新增「強隊亞盤轉換 (-0.5)」策略。</div>
+            <div class="text-slate-400">👉 準備就緒。請在上方輸入目標賽事 ID 並點擊「執行分析」。</div>
+            <div class="highlight-pink font-bold mt-2">==================================================</div>
+        </div>
+    </div>
+
+    <script>
+        // 取得安全變數的輔助函數
+        function getVar(rawJs, varName) {
+            const regex = new RegExp(`var\\s+${varName}\\s*=\\s*['"]([^'"]+)['"]`, 'i');
+            const match = rawJs.match(regex);
+            return match ? match[1] : null;
+        }
+
+        // 終端機印出函數
+        function printToConsole(htmlString) {
+            const consoleDiv = document.getElementById('outputConsole');
+            consoleDiv.innerHTML += `<div>${htmlString}</div>`;
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        }
+
+        // 清除終端機
+        function clearConsole() {
+            document.getElementById('outputConsole').innerHTML = '';
+        }
+
+        // 處理 Enter 鍵
+        function handleKeyPress(e) {
+            if (e.key === 'Enter') runAnalysis();
+        }
+
+        // 核心分析執行函數
+        async function runAnalysis() {
+            const matchId = document.getElementById('matchIdInput').value.trim();
+            if (!matchId || isNaN(matchId)) {
+                printToConsole(`<span class="highlight-yellow">[提示] 賽事 ID 必須是純數字。</span>`);
+                return;
+            }
+
+            clearConsole();
+            printToConsole(`<span class="highlight-blue font-bold">--------------------------------------------------</span>`);
+            printToConsole(`<span class="highlight-cyan">[網路] 正在連線獲取賽事 ${matchId} 的即時數據<span class="loading"></span></span>`);
+
+            try {
+                // 使用免費的 CORS Proxy 來繞過瀏覽器跨域限制
+                const targetUrl = encodeURIComponent(`https://1x2.nowscore.com/${matchId}.js`);
+                const proxyUrl = `https://api.allorigins.win/raw?url=${targetUrl}`;
+                
+                const response = await fetch(proxyUrl);
+                if (!response.ok) throw new Error('網路回應異常');
+                
+                const rawJs = await response.text();
+                
+                if (rawJs.length < 500) {
+                    throw new Error('獲取的數據長度過短或無效');
+                }
+
+                processQuantModel(rawJs, matchId);
+
+            } catch (error) {
+                printToConsole(`<span class="highlight-red">[錯誤] 網路請求失敗或無法獲取有效數據。可能是該場次無盤口數據，或是防爬蟲機制啟動。(${error.message})</span>`);
+            }
+        }
+
+        // V8 量化引擎核心邏輯
+        function processQuantModel(rawJs, matchId) {
+            let league = getVar(rawJs, "matchname_cn") || getVar(rawJs, "matchname") || "未知聯賽";
+            let homeTeam = getVar(rawJs, "hometeam_cn") || getVar(rawJs, "hometeam") || "未知主隊";
+            let awayTeam = getVar(rawJs, "guestteam_cn") || getVar(rawJs, "guestteam") || "未知客隊";
+
+            if (homeTeam === "未知主隊" || awayTeam === "未知客隊") {
+                printToConsole(`<span class="highlight-red">[錯誤] 解析失敗，獲取的內容不是預期的賽事結構。</span>`);
+                return;
+            }
+
+            const bookieRegex = /"(\d+)\^([^"]+)"/g;
+            let tier1Bookies = {};
+            let validEvents = 0;
+            let latestTimestampGlobal = 0;
+
+            let match;
+            const currentYear = new Date().getFullYear();
+
+            // 1. 數據清洗與過濾
+            while ((match = bookieRegex.exec(rawJs)) !== null) {
+                const bId = match[1];
+                const historyStr = match[2];
+                const records = historyStr.split(';').filter(s => s.trim().length > 0);
+                
+                let parsed = [];
+                for (let r of records) {
+                    const parts = r.split('|');
+                    if (parts.length >= 4) {
+                        try {
+                            const h = parseFloat(parts[0]);
+                            const d = parseFloat(parts[1]);
+                            const a = parseFloat(parts[2]);
+                            const timeRaw = parts[3]; // format: MM-DD HH:mm
+                            const year = (parts.length > 7 && parts[7].length === 4) ? parts[7] : currentYear;
+                            
+                            // 構建 Date 物件以計算 timestamp
+                            const [monthDay, hourMin] = timeRaw.split(' ');
+                            const [month, day] = monthDay.split('-');
+                            const [hour, min] = hourMin.split(':');
+                            const dt = new Date(year, parseInt(month)-1, day, hour, min);
+                            const ts = dt.getTime() / 1000;
+
+                            parsed.push({ h, d, a, time: timeRaw, ts });
+                            if (ts > latestTimestampGlobal) latestTimestampGlobal = ts;
+                        } catch (e) { /* ignore parse error */ }
+                    }
+                }
+
+                if (parsed.length < 2) continue;
+                parsed.sort((a, b) => a.ts - b.ts);
+
+                const o = parsed[0];
+                const margin = (1/o.h) + (1/o.d) + (1/o.a);
+                const payoutRate = (1/margin) * 100;
+
+                // Tier 1 條件
+                if (payoutRate >= 93.5 || parsed.length >= 20) {
+                    tier1Bookies[bId] = parsed;
+                    validEvents += parsed.length;
+                }
+            }
+
+            const numBookies = Object.keys(tier1Bookies).length;
+            if (numBookies === 0) {
+                printToConsole(`<span class="highlight-yellow">缺乏足夠的主流莊家數據。</span>`);
+                return;
+            }
+
+            // 2. 真實概率偏移與臨場急跌
+            let shifts = { home: [], draw: [], away: [] };
+            let avgOpen = { home: 0, draw: 0, away: 0 };
+            let avgClose = { home: 0, draw: 0, away: 0 };
+            let lateSteamCount = 0;
+
+            for (let bId in tier1Bookies) {
+                const hist = tier1Bookies[bId];
+                const o = hist[0];
+                const c = hist[hist.length - 1];
+
+                const oMargin = (1/o.h) + (1/o.d) + (1/o.a);
+                const cMargin = (1/c.h) + (1/c.d) + (1/c.a);
+
+                const oProbH = (1/o.h)/oMargin, cProbH = (1/c.h)/cMargin;
+                const oProbD = (1/o.d)/oMargin, cProbD = (1/c.d)/cMargin;
+                const oProbA = (1/o.a)/oMargin, cProbA = (1/c.a)/cMargin;
+
+                shifts.home.push((cProbH - oProbH) * 100);
+                shifts.draw.push((cProbD - oProbD) * 100);
+                shifts.away.push((cProbA - oProbA) * 100);
+
+                avgOpen.home += o.h; avgOpen.draw += o.d; avgOpen.away += o.a;
+                avgClose.home += c.h; avgClose.draw += c.d; avgClose.away += c.a;
+
+                // 臨場急跌 (最後 24 小時 = 86400 秒)
+                for (let i = 1; i < hist.length; i++) {
+                    const prev = hist[i-1], curr = hist[i];
+                    if (curr.ts >= (latestTimestampGlobal - 86400)) {
+                        if (prev.h > 0 && prev.a > 0) {
+                            const dropH = ((prev.h - curr.h) / prev.h) * 100;
+                            const dropA = ((prev.a - curr.a) / prev.a) * 100;
+                            if (dropH > 2.0 || dropA > 2.0) {
+                                lateSteamCount++;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            avgOpen.home /= numBookies; avgOpen.draw /= numBookies; avgOpen.away /= numBookies;
+            avgClose.home /= numBookies; avgClose.draw /= numBookies; avgClose.away /= numBookies;
+            
+            const avgShifts = {
+                home: shifts.home.reduce((a,b)=>a+b,0)/numBookies,
+                draw: shifts.draw.reduce((a,b)=>a+b,0)/numBookies,
+                away: shifts.away.reduce((a,b)=>a+b,0)/numBookies
+            };
+
+            // 尋找最大偏移方
+            let targetKey = 'home';
+            let maxShift = avgShifts.home;
+            if (avgShifts.draw > maxShift) { targetKey = 'draw'; maxShift = avgShifts.draw; }
+            if (avgShifts.away > maxShift) { targetKey = 'away'; maxShift = avgShifts.away; }
+
+            const targetShift = maxShift;
+            const targetOpenOdds = avgOpen[targetKey];
+            const targetCloseOdds = avgClose[targetKey];
+            let targetName = "";
+            if (targetKey === 'home') targetName = `主隊: ${homeTeam}`;
+            else if (targetKey === 'away') targetName = `客隊: ${awayTeam}`;
+            else targetName = "和局 (Draw)";
+
+            const targetDropsList = shifts[targetKey];
+
+            // 3. 評分權重計算
+            const consensusRatio = targetDropsList.filter(s => s > 1.5).length / numBookies;
+            const lateSteamRatio = lateSteamCount / numBookies;
+
+            let scoreShift = targetShift > 0 ? Math.min(40.0, (targetShift / 5.0) * 40.0) : 0;
+            let scoreConsensus = Math.min(30.0, (consensusRatio / 0.8) * 30.0);
+            let scoreLate = Math.min(15.0, (lateSteamRatio / 0.5) * 15.0);
+
+            let scoreOdds = 0;
+            if (targetOpenOdds < 2.0) {
+                scoreOdds = 15.0;
+                if (targetKey === 'home') scoreOdds += 5.0;
+            } else if (targetOpenOdds < 3.2) {
+                scoreOdds = 5.0;
+            } else {
+                scoreOdds = -15.0;
+            }
+
+            let totalScore = Math.max(0.0, scoreShift + scoreConsensus + scoreLate + scoreOdds);
+
+            // 4. 凱利公式計算
+            const cMarginFinal = (1/avgClose.home) + (1/avgClose.draw) + (1/avgClose.away);
+            const impliedProb = (1/targetCloseOdds) / cMarginFinal;
+            const edgeMultiplier = totalScore > 50 ? 1.0 + ((totalScore - 50) / 1000.0) : 1.0;
+            const ourProb = Math.min(0.95, impliedProb * edgeMultiplier);
+
+            const bOdds = targetCloseOdds - 1.0;
+            const qProb = 1.0 - ourProb;
+            let kellyFraction = 0;
+            if (bOdds > 0) kellyFraction = (bOdds * ourProb - qProb) / bOdds;
+            const suggestedStake = Math.max(0.0, (kellyFraction / 2.0) * 100);
+
+            // ==========================================
+            // 畫面輸出構建
+            // ==========================================
+            let starsStr = "★".repeat(Math.floor(totalScore / 20)) + "☆".repeat(5 - Math.floor(totalScore / 20));
+            let confLvl = "";
+            if (totalScore >= 85) confLvl = `<span class="highlight-green">S 級黃金信號 (絕佳優勢)</span>`;
+            else if (totalScore >= 70) confLvl = `<span class="highlight-blue">A 級強勢信號 (極高勝率)</span>`;
+            else if (totalScore >= 50) confLvl = `<span class="highlight-yellow">B 級盤口調整 (建議觀望)</span>`;
+            else confLvl = `<span class="highlight-red">C 級弱勢/誘盤陷阱 (堅決不碰)</span>`;
+
+            printToConsole(`<br><span class="highlight-pink font-bold">==================================================</span>`);
+            printToConsole(`<span class="highlight-pink font-bold">   [賽事量化終端 V8.0] - Web 亞盤思維與強隊校準版</span>`);
+            printToConsole(`<span class="highlight-pink font-bold">==================================================</span>`);
+            printToConsole(`⚽ <b>${league} | ${homeTeam} VS ${awayTeam}</b><br>`);
+
+            printToConsole(`📊 <b>[市場微觀結構]</b> | Tier 1 大莊: ${numBookies} 家 | 變盤紀錄: ${validEvents} 次<br>`);
+
+            if (targetShift > 1.0) {
+                printToConsole(`🎯 <b>[Smart Money 目標鎖定]</b>`);
+                printToConsole(` ├─ 資金傾斜方向: <b>${targetName}</b> (初盤: ${targetOpenOdds.toFixed(2)} ➡ 終盤: ${targetCloseOdds.toFixed(2)})`);
+                printToConsole(` ├─ 量化綜合評分: <span class="highlight-yellow">${starsStr}</span> [${totalScore.toFixed(1)}/100 分]`);
+                printToConsole(` └─ 系統判定級別: ${confLvl}<br>`);
+
+                printToConsole(`📈 <b>[真實勝率偏移 (True Probability Shift)]</b>`);
+                printToConsole(` ├─ 隱含勝率暴增: <span class="highlight-green">+${targetShift.toFixed(2)}%</span> (純淨資金增量)`);
+                
+                const steamStr = lateSteamRatio > 0.4 ? `<span class="highlight-red">強烈</span>` : "一般";
+                printToConsole(` ├─ 臨場急跌特徵: ${steamStr} (${(lateSteamRatio*100).toFixed(1)}% 莊家在最後24h內緊急降水)`);
+
+                printToConsole(`<br>💡 <b>[V8 AI 實戰操作建議]</b>`);
+                
+                if (totalScore >= 70) {
+                    if (targetOpenOdds < 2.2) {
+                        const betTarget = targetKey === 'home' ? "主勝 (1)" : "客勝 (2)";
+                        const ahSuggestion = targetCloseOdds < 1.8 ? "讓半球 (-0.5)" : "平手/半球 (-0.25)";
+                        printToConsole(` └─ <span class="highlight-green">【首選策略】: 投注 ${betTarget} 獨贏，或切換至亞盤「${ahSuggestion}」</span>`);
+                        printToConsole(`    解讀: 莊家將其視為強勢方且大筆資金持續湧入。實力碾壓加上資金認同，不需要委屈買低賠雙勝彩，直接打擊讓球盤！`);
+                        printToConsole(`    注碼: 建議總資金的 ${suggestedStake.toFixed(1)}% (Half-Kelly)`);
+                    } else {
+                        const ahTarget = targetKey === 'home' ? "主隊受讓 (+0.5/0)" : "客隊受讓 (+0.5/0)";
+                        printToConsole(` └─ <span class="highlight-yellow">【首選策略】: 投注「雙勝彩 (不敗)」或亞盤「${ahTarget}」。</span>`);
+                        printToConsole(`    解讀: 此為下盤/弱隊降水。聰明錢通常在博取讓球盤獲利，而非買獨贏。買受讓防守和局是最聰明的作法！`);
+                        printToConsole(`    注碼: 由於勝率波動較大，建議平注或總資金的 2.0%~3.0%。`);
+                    }
+                } else if (totalScore >= 60) {
+                    printToConsole(` └─ <span class="highlight-blue">【次級策略】: 邊緣信號。</span> 若要參與，僅建議極小注購買「亞洲盤受讓」方向博冷。`);
+                } else {
+                    printToConsole(` └─ <span class="highlight-red">【防禦策略】: 堅決放棄本場賽事。</span>`);
+                    printToConsole(`    解讀: 量化交易的核心是「少做少錯」，強行放寬標準只會踏入莊家的高賠誘盤陷阱。`);
+                }
+
+            } else {
+                printToConsole(`🎯 <b>[Smart Money 狀態]</b>`);
+                printToConsole(` └─ <span class="highlight-yellow">全市場定價穩定，真實勝率偏移 < 1%，無明顯主力資金介入痕跡。</span><br>`);
+            }
+
+            printToConsole(`<br><span class="highlight-pink font-bold">==================================================</span><br>`);
+        }
+    </script>
+</body>
+</html>
