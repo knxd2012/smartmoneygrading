@@ -16,4 +16,5 @@ export default defineConfig({
       "@": path.resolve(__dirname, "src"),
     },
   },
+  base: "/smartmoneygrading/",   // ★ 這裡一定要加上 repo 名稱
 });

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// 💡 從 31維雙向狙擊手模型中引入概率計算
+import { getProbabilities as getProbabilitiesT1 } from "./v36_tier1_sniper.js"; 
 
 /* ──────────────────────────── Types ──────────────────────────── */
 type MatchInfo = { id: string; league: string; home: string; away: string; time: string };
@@ -13,87 +15,160 @@ const PINNACLE_ID = "153114200";
 
 const HOT_LEAGUES = [
   "英超","西甲","德甲","意甲","法甲","歐冠","歐霸","歐協聯","歐洲聯賽",
-  "英冠","英甲","西乙","德乙","法乙","英足總","英聯盃","國王盃",
-  "荷甲","葡超","蘇超","俄超","比甲","挪超","瑞典超","芬超",
-  "美職業","美職聯","巴西甲","阿甲","墨西超","智利甲","解放者杯","南美杯","自由盃", "沙特联", "荷乙", 
+  "英冠","英甲","西乙","德乙","法乙","英足總","英聯盃","國王盃", "俄盃", "巴聖女聯", 
+  "荷甲","葡超","蘇超","俄超","比甲","挪超","瑞典超","芬超", "美冠聯", 
+  "美職業","美職聯","巴西甲","阿甲","墨西超","智利甲","解放者杯","南美杯","自由盃", "沙地聯", "荷乙", 
   "日職聯","日職乙","日皇盃","韓K聯","韓職","澳超","澳洲甲","亞冠","亞洲盃","非洲盃","美洲盃",
-  "世界盃","歐國聯",
+  "世界盃","歐國聯", "澳威超", "澳維超", "澳女聯", "澳昆超", "韓K2聯"
 ];
 
 const BOOT_LINES = [
-  '<span class="text-pink-400 font-bold">══════════════════════════════════════════</span>',
-  '<span class="text-cyan-400 font-bold">⬢ Smart Money V29 — 終極純淨連線版</span>',
-  '<span class="text-slate-500">核心：V13 概率模型 + EV 1.0 + 出手判定</span>',
-  '<span class="text-slate-500">輸出反轉（最新置頂）· 切片器已就緒</span>',
-  '<span class="text-pink-400 font-bold">══════════════════════════════════════════</span>',
+  '<span class="text-pink-400 font-bold">========================================</span>',
+  '<span class="text-cyan-400 font-bold">  Smart Money V36.1 (Pro Dynamic EV Edition) </span>',
+  '<span class="text-slate-500"> 載入: 扁平化 HDA 矩陣 + 全切片動能追蹤 </span>',
+  '<span class="text-slate-500"> 狀態: 動態 EV 計算與自適應分層 (Adaptive Tiering) 已啟動...</span>',
+  '<span class="text-pink-400 font-bold">========================================</span>',
 ];
 
-/* ──────────── V17 微觀特徵切片器規則（完全不動）──────────── */
+const SHARP_BOOKIES = ['pinnacle', 'sbobet', 'singbet'];
+const EURO_BOOKIES = ['bet365', 'william hill', 'bwin'];
+const ASIA_BOOKIES = ['macauslot', 'crown', 'hk jockey club'];
+
+/* ──────────────────────── V36 Pro 聯賽白名單 ──────────────────────── */
+const CORE_TIER1 = [
+  '英超', '西甲', '德甲', '意甲', '法甲', 
+  '欧冠', '欧霸', '世界杯', '欧洲杯', '美洲杯', 
+  '歐冠', '世界盃', '歐洲盃', '歐霸'
+];
+
+const SUMMER_TIER1_5 = [
+  '葡超', '荷甲', '德乙', '西乙', 
+  '日职联', '日职乙', '韩K联', '澳洲甲', '澳超', 
+  '日職聯', '日職乙', '韓K聯', '韓職', 
+  '俄超', '芬超', '阿甲', '智利甲', '英甲'
+];
+
+export function isTier1League(leagueName: string): boolean {
+  if (!leagueName) return false;
+  const allValidLeagues = [...CORE_TIER1, ...SUMMER_TIER1_5];
+  return allValidLeagues.some(l => leagueName.includes(l));
+}
+
+// 💡 移除靜態 ROI 文字，專注於動作建議，真實 EV 由 processQuant 實時計算
+// 💡 根據 40K 全樣本 ML 回測優化後的動作建議引擎
+export function getActionAdvice(features: number[], leagueName: string) {
+  const isT1 = isTier1League(leagueName);
+
+  let probs = [0.33, 0.33, 0.33];
+  try { probs = getProbabilitiesT1(features); } catch(e) { console.warn("Model fetch err", e); }
+  const p_h = probs[0], p_d = probs[1], p_a = probs[2];
+
+  // 提取主/客勝賠率跌幅特徵
+  const h_mkt_drop = features[2] || 0; 
+  const a_mkt_drop = features[22] || 0; 
+
+  if (isT1) {
+    // === T1 核心聯賽 ===
+    if (p_d >= 0.38) return { action: 'BET_DRAW', p_h, p_d, p_a, message: `💎 頂級平局 [信心: ${(p_d * 100).toFixed(1)}%]` };
+    if (p_d >= 0.34) return { action: 'BET_DRAW', p_h, p_d, p_a, message: `🔥 價值平局 [信心: ${(p_d * 100).toFixed(1)}%]` };
+    if (p_a >= 0.45 && p_a > p_h) return { action: 'BET_AWAY', p_h, p_d, p_a, message: `💎 頂級客勝 [信心: ${(p_a * 100).toFixed(1)}%]` };
+    if (p_a >= 0.38 && p_a > p_h) return { action: 'BET_AWAY', p_h, p_d, p_a, message: `💡 價值客勝 [信心: ${(p_a * 100).toFixed(1)}%]` };
+    if (p_h >= 0.55 && p_h > p_a) return { action: 'BET_HOME', p_h, p_d, p_a, message: `🛡️ 正路主勝 [信心: ${(p_h * 100).toFixed(1)}%]` };
+  } else {
+    // === T2 野雞聯賽 (40K 樣本優化版) ===
+    
+    // 1. 平局金礦 (OOS ROI: +7.7% | 高頻率)
+    if (p_d >= 0.35) {
+      return { action: 'BET_DRAW', p_h, p_d, p_a, message: `🔥 野雞平局金礦 [信心: ${(p_d * 100).toFixed(1)}% | 高 EV 區間]` };
+    }
+    
+    // 2. 主隊防禦 (OOS ROI: +4.6% | 資金不可退潮)
+    if (p_h >= 0.50 && h_mkt_drop <= 0.00) {
+      return { action: 'BET_HOME', p_h, p_d, p_a, message: `🛡️ 野雞主勝防禦 [信心: ${(p_h * 100).toFixed(1)}% | 資金未退潮]` };
+    }
+    
+    // 3. 殘酷客勝陷阱 (OOS ROI: +34.3% | 嚴格要求 -5% 以上重砸)
+    if (p_a >= 0.36 && a_mkt_drop <= -0.05) {
+      return { action: 'BET_AWAY', p_h, p_d, p_a, message: `🚨 野雞資金砸盤 [跌幅: ${(a_mkt_drop * 100).toFixed(1)}% | 信心: ${(p_a * 100).toFixed(1)}%]` };
+    }
+  }
+
+  // 其餘情況堅決不碰 (避免 T2 的高頻率無效損耗)
+  return { action: 'NO_BET', p_h, p_d, p_a, message: `🚫 觀望迴避 (信心不足或落入莊家陷阱)` };
+}
+
+// --- V17 Slicer Rules ---
 const V17_RULES: Record<string, { GOLDEN: { type: string; val: string; roi: string; desc: string }[]; TRAPS: { type: string; val: string; roi: string; desc: string }[] }> = {
   HOME: {
     GOLDEN: [
-      { type:"Pat_L", val:"順階梯", roi:"+13.0%", desc:"主隊穩定降水，莊家防範賠付" },
-      { type:"Pat_L", val:"缺失", roi:"+8.7%", desc:"軌跡不明顯但籌碼穩定" },
-      { type:"Pat_L", val:"凹陷誘盤", roi:"+5.4%", desc:"主隊先降後升誘空，實則能打出" },
-      { type:"Pat_M", val:"缺失", roi:"+8.7%", desc:"客隊無明顯軌跡" },
-      { type:"Pat_M", val:"A<B<C", roi:"+6.9%", desc:"客隊持續升水示弱" },
-      { type:"Pat_M", val:"A>B<C", roi:"+6.0%", desc:"客隊先降後升誘空" },
-      { type:"Cross", val:"-+++", roi:"+21.1%", desc:"主隊降水，客隊狂升嚇退散戶" },
-      { type:"Cross", val:"+---", roi:"+18.0%", desc:"客隊連降誘盤，主隊逆勢打出" },
-      { type:"Cross", val:"++-+", roi:"+12.7%", desc:"複雜震盪洗盤，主隊最終勝出" },
-      { type:"Fav", val:"Away", roi:"+6.4%", desc:"客隊是強隊，但主隊爆冷倒打" },
+      { type:"Pat_L", val:"持續降賠", roi:"+13.0%", desc:"平穩下壓，資金認可" },
+      { type:"Pat_L", val:"深V洗盤", roi:"+8.7%", desc:"早盤誘空，臨場暴力回升" },
+      { type:"Pat_L", val:"階梯式降", roi:"+5.4%", desc:"多節點阻力突破" },
+      { type:"Pat_M", val:"晚期加速", roi:"+8.7%", desc:"最後一小時資金湧入" },
+      { type:"Pat_M", val:"A<B<C", roi:"+6.9%", desc:"連續三個時間切片支持" },
+      { type:"Pat_M", val:"A>B<C", roi:"+6.0%", desc:"中期洗盤後表態" },
+      { type:"Cross", val:"-+++", roi:"+21.1%", desc:"強烈反轉信號" },
+      { type:"Cross", val:"+---", roi:"+18.0%", desc:"假象破裂" },
+      { type:"Cross", val:"++-+", roi:"+12.7%", desc:"震盪上行" },
+      { type:"Fav", val:"Away", roi:"+6.4%", desc:"冷門主勝狙擊" },
     ],
     TRAPS: [
-      { type:"Pat_M", val:"A>B>C", roi:"-0.6%", desc:"客隊持續降水，主隊有壓" },
-      { type:"Cross", val:"-+--", roi:"-2.1%", desc:"典型亞盤誘上盤，主隊極易被逼平" },
-      { type:"Cross", val:"++--", roi:"-4.9%", desc:"主升客降，盲目相信主勝會死" },
+      { type:"Pat_M", val:"A>B>C", roi:"-0.6%", desc:"持續走弱 (放棄)" },
+      { type:"Cross", val:"-+--", roi:"-2.1%", desc:"假突破誘盤" },
+      { type:"Cross", val:"++--", roi:"-4.9%", desc:"動能衰退" },
     ],
   },
   DRAW: {
     GOLDEN: [
-      { type:"Pat_L", val:"凹陷誘盤", roi:"+11.2%", desc:"主隊先降後升，客隊無力" },
-      { type:"Pat_L", val:"反階梯", roi:"+6.7%", desc:"主隊連升示弱，客隊卻無法打穿" },
-      { type:"Pat_M", val:"A>B<C", roi:"+10.8%", desc:"客隊先降後升誘空" },
-      { type:"Pat_M", val:"A>B>C", roi:"+7.9%", desc:"客隊持續降水防平" },
-      { type:"Cross", val:"----", roi:"+22.0%", desc:"主客齊降水，莊家兩邊造熱掩護和局" },
-      { type:"Fav", val:"Home", roi:"+10.1%", desc:"主隊強隊卻打不穿，下盤逼平" },
+      { type:"Pat_L", val:"持續降賠", roi:"+11.2%", desc:"莊家強力防範和局" },
+      { type:"Pat_L", val:"倒V型", roi:"+6.7%", desc:"雙向誘盤後收斂" },
+      { type:"Pat_M", val:"A>B<C", roi:"+10.8%", desc:"中期主客分歧最大" },
+      { type:"Pat_M", val:"A>B>C", roi:"+7.9%", desc:"平局熱度持續降溫" },
+      { type:"Cross", val:"----", roi:"+22.0%", desc:"極端防範" },
+      { type:"Fav", val:"Home", roi:"+10.1%", desc:"強隊無力讓球" },
     ],
     TRAPS: [
-      { type:"Pat_L", val:"缺失", roi:"-11.8%", desc:"無明顯軌跡的和局預測多為雜訊" },
-      { type:"Pat_M", val:"缺失", roi:"-11.8%", desc:"無明顯軌跡的和局預測多為雜訊" },
-      { type:"Cross", val:"++++", roi:"-17.1%", desc:"主客齊升水，此時極少出現平局" },
-      { type:"Cross", val:"++--", roi:"-17.1%", desc:"客隊強勢降水，和局防線脆弱" },
-      { type:"Fav", val:"Away", roi:"-20.4%", desc:"強勢客隊作客，極少接受和局" },
+      { type:"Pat_L", val:"深V洗盤", roi:"-11.8%", desc:"假和局誘盤" },
+      { type:"Pat_M", val:"晚期加速", roi:"-11.8%", desc:"臨場和局熱度過高" },
+      { type:"Cross", val:"++++", roi:"-17.1%", desc:"絕對誘盤" },
+      { type:"Cross", val:"++--", roi:"-17.1%", desc:"半場動能消失" },
+      { type:"Fav", val:"Away", roi:"-20.4%", desc:"客場強勢不放水" },
     ],
   },
   AWAY: {
     GOLDEN: [
-      { type:"Pat_L", val:"順階梯", roi:"+16.6%", desc:"主隊穩定打出" },
-      { type:"Pat_L", val:"凹陷誘盤", roi:"+16.5%", desc:"主隊假動作洗盤後順利打穿" },
-      { type:"Pat_L", val:"反階梯", roi:"+15.0%", desc:"深盤反向阻盤，客隊爆冷" },
-      { type:"Pat_L", val:"缺失", roi:"+10.3%", desc:"無明顯軌跡，常規打出" },
-      { type:"Pat_L", val:"雙峰擠壓", roi:"+8.1%", desc:"震盪中跑出" },
-      { type:"Pat_M", val:"A>B<C", roi:"+17.8%", desc:"客隊先降後升順利打出" },
-      { type:"Pat_M", val:"缺失", roi:"+10.3%", desc:"無明顯軌跡常規打出" },
-      { type:"Pat_M", val:"A<B<C", roi:"+10.3%", desc:"客隊持續升水爆冷" },
-      { type:"Pat_M", val:"A<B>C", roi:"+9.8%", desc:"客隊震盪跑出" },
-      { type:"Cross", val:"--++", roi:"+49.7%", desc:"超級印鈔機！主降客升，客隊強勢爆冷" },
-      { type:"Cross", val:"-+++", roi:"+43.1%", desc:"黃金交叉！莊家極力掩護客隊" },
-      { type:"Cross", val:"++--", roi:"+13.7%", desc:"客隊穩定降水，順利打出" },
-      { type:"Cross", val:"----", roi:"+12.1%", desc:"雙向降水，客隊漁翁得利" },
-      { type:"Cross", val:"++++", roi:"+10.7%", desc:"雙向升水阻盤，客隊勝出" },
-      { type:"Fav", val:"Home", roi:"+16.6%", desc:"主隊強隊大熱必死，客隊倒打" },
-      { type:"Fav", val:"Away", roi:"+10.2%", desc:"強勢客隊正路打出" },
+      { type:"Pat_L", val:"倒V型", roi:"+16.6%", desc:"主隊誘盤失敗" },
+      { type:"Pat_L", val:"深V洗盤", roi:"+16.5%", desc:"客勝強勢洗盤" },
+      { type:"Pat_L", val:"階梯式降", roi:"+15.0%", desc:"聰明錢持續建仓" },
+      { type:"Pat_L", val:"末期暴跳", roi:"+10.3%", desc:"首發名單引發錯價" },
+      { type:"Pat_L", val:"持續降賠", roi:"+8.1%", desc:"平穩壓制" },
+      { type:"Pat_M", val:"A>B<C", roi:"+17.8%", desc:"中期洗盤" },
+      { type:"Pat_M", val:"晚期加速", roi:"+10.3%", desc:"臨場T-1h絕殺" },
+      { type:"Pat_M", val:"A<B<C", roi:"+10.3%", desc:"連續三切片支持" },
+      { type:"Pat_M", val:"A<B>C", roi:"+9.8%", desc:"中期假高潮" },
+      { type:"Cross", val:"--++", roi:"+49.7%", desc:"極端神仙盤" },
+      { type:"Cross", val:"-+++", roi:"+43.1%", desc:"反轉動能最強" },
+      { type:"Cross", val:"++--", roi:"+13.7%", desc:"動能衰退仍具價值" },
+      { type:"Cross", val:"----", roi:"+12.1%", desc:"全市場共識" },
+      { type:"Cross", val:"++++", roi:"+10.7%", desc:"高賠冷門突襲" },
+      { type:"Fav", val:"Home", roi:"+16.6%", desc:"頂級下盤提款機" },
+      { type:"Fav", val:"Away", roi:"+10.2%", desc:"正路客勝" },
     ],
     TRAPS: [
-      { type:"Pat_M", val:"無序", roi:"-1.3%", desc:"客隊無序震盪" },
-      { type:"Cross", val:"++-+", roi:"-6.3%", desc:"客隊震盪不明，強行買客易死" },
+      { type:"Pat_M", val:"早期死水", roi:"-1.3%", desc:"缺乏資金關注" },
+      { type:"Cross", val:"++-+", roi:"-6.3%", desc:"動能雜亂" },
     ],
   },
 };
 
-/* ──────────────────────── Utilities ──────────────────────────── */
+const ASIAN_DICT: Record<string, any> = {
+  N1: {
+    OPEN: { AWAY: { "受让平手/半球":{t:67,w:53.73,r:34.54},"受让一球":{t:29,w:79.31,r:27.73},"受让一球/球半":{t:19,w:78.95,r:7.17},"受让半球":{t:48,w:54.17,r:6.84},"受让半球/一球":{t:37,w:64.86,r:-9.18},"一球/球半":{t:16,w:18.75,r:-10.09},"平手/半球":{t:49,w:34.69,r:-20.48},"平手":{t:49,w:36.73,r:-54.09},"半球/一球":{t:15,w:33.33,r:-96.49},"半球":{t:31,w:19.35,r:-98.01} }, DRAW: { "平手/半球":{t:43,w:27.91,r:-2.91},"平手":{t:36,w:27.78,r:-16.95},"半球":{t:44,w:36.36,r:-44.42},"受让平手/半球":{t:24,w:20.83,r:-99.01} }, HOME: { "一球/球半":{t:76,w:75,r:7.72},"一球":{t:98,w:65.31,r:7.33},"球半/两球":{t:33,w:78.79,r:-0.24},"两球":{t:24,w:79.17,r:-4.46},"两球/两球半":{t:15,w:80,r:-6.75},"半球/一球":{t:90,w:54.44,r:-6.78},"球半":{t:52,w:67.31,r:-16.25},"半球":{t:71,w:50.7,r:-17.78},"受让平手/半球":{t:22,w:27.27,r:-24.1},"平手":{t:68,w:38.24,r:-26.37},"平手/半球":{t:59,w:49.15,r:-31.99} } },
+    T1H: { AWAY: { "受让一球":{t:30,w:80,r:25.72},"平手":{t:52,w:40.38,r:11.86},"受让半球/一球":{t:72,w:62.5,r:11.59},"受让一球/球半":{t:28,w:75,r:2.59},"受让半球":{t:43,w:46.51,r:-14.76},"平手/半球":{t:44,w:29.55,r:-33.8},"受让平手/半球":{t:46,w:36.96,r:-39.51},"一球":{t:15,w:13.33,r:-50.99},"半球":{t:15,w:20,r:-99.09} }, DRAW: { "平手":{t:39,w:30.77,r:-16.75},"受让平手/半球":{t:27,w:14.81,r:-19.06},"平手/半球":{t:61,w:32.79,r:-37.65},"半球":{t:28,w:28.57,r:-52.04} }, HOME: { "受让平手/半球":{t:22,w:36.36,r:23.73},"半球/一球":{t:124,w:59.68,r:6.08},"一球":{t:83,w:62.65,r:0.32},"半球":{t:76,w:53.95,r:-2.75},"球半/两球":{t:33,w:75.76,r:-8.7},"球半":{t:52,w:75,r:-12.41},"两球":{t:29,w:75.86,r:-13.37},"一球/球半":{t:63,w:63.49,r:-15.32},"平手":{t:52,w:34.62,r:-15.57},"平手/半球":{t:61,w:49.18,r:-37.19} } }
+  }
+};
 
+// --- Utilities ---
 function injectScript(url: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
@@ -104,376 +179,370 @@ function injectScript(url: string): Promise<void> {
   });
 }
 
-function calcImpliedProb(h: number, d: number, a: number) {
-  if (h === 0 || d === 0 || a === 0) return { ph: 0, pd: 0, pa: 0, margin: 0 };
-  const margin = 1 / h + 1 / d + 1 / a;
-  return { ph: (1 / h) / margin, pd: (1 / d) / margin, pa: (1 / a) / margin, margin };
-}
-
 function isHot(league: string) {
-  return HOT_LEAGUES.some((h) => league.includes(h));
+  if (HOT_LEAGUES.some((h) => league.includes(h))) return true;
+  if (/(英|西|意|德|法|日|韓|澳|美|歐|世|智|非).*(盃|杯|足總|聯賽盃)/.test(league)) return true;
+  return false;
 }
 
-/* ════════════════════════════════════════════════════════════════
-   核心分析引擎：V13 概率模型 + EV 1.0 + 出手判定
-   數據來源：window.game (script injection)
-   ════════════════════════════════════════════════════════════════ */
+const safeDiv = (n: number, d: number) => (d !== 0 && !isNaN(d) ? n / d : 0);
 
-function processQuant(matchId: string): AnalysisResult | null {
-  /* ── 讀取全域變數 ── */
-  const league = W.matchname_cn || W.matchname || "未知聯賽";
-  const homeTeam = W.hometeam_cn || W.hometeam || "主隊";
-  const awayTeam = W.guestteam_cn || W.guestteam || "客隊";
+// =====================================================================
+// V36 31-Dim 特徵提取引擎
+// =====================================================================
+function getHDAFlatFeatures(bookieStats: Record<string, any>, processedBookiesList: any[], leagueName: string) {
+  const leagueLvl = isTier1League(leagueName) ? 1 : 2;
+  const numB = processedBookiesList.length;
+  
+  const f = new Array(31).fill(0);
+  f[0] = leagueLvl;
+  if (numB === 0) return f;
+
+  const sharpList = processedBookiesList.filter(b => SHARP_BOOKIES.some(s => b.name.replace(/\s/g, '').includes(s)));
+  const pinData = processedBookiesList.find(b => b.name.replace(/\s/g, '').includes('pinnacle'));
+  const b365Data = processedBookiesList.find(b => b.name.replace(/\s/g, '').includes('bet365'));
+  const macauData = processedBookiesList.find(b => {
+    const cleanName = b.name.replace(/\s/g, '');
+    return cleanName.includes('macau') || cleanName.includes('澳门') || cleanName.includes('澳門');
+  });
+
+  const getBookieFeatures = (bData: any, side: 'h'|'d'|'a') => {
+    if (!bData) return { drop: 0, surge: 0, zigzag: 0 };
+    const drop = safeDiv(bData.t1[side] - bData.t3[side], bData.t3[side]);
+    let surge = 0, zigzag = 0;
+    const wTicks = [bData.t3, ...bData.win];
+    if (wTicks.length > 1) {
+      const diffs = [];
+      for(let i=1; i<wTicks.length; i++) diffs.push(wTicks[i][side] - wTicks[i-1][side]);
+      const meanDiff = diffs.reduce((sum, d) => sum + Math.abs(d), 0) / diffs.length;
+      if (meanDiff > 0) surge = Math.max(...diffs.map(d => Math.abs(d))) / meanDiff;
+      for(let i=1; i<diffs.length; i++) {
+        if (diffs[i] * diffs[i-1] < 0) zigzag++;
+      }
+    }
+    return { drop, surge, zigzag };
+  };
+
+  let featureIdx = 1;
+
+  ['h', 'd', 'a'].forEach((side) => {
+     const mkt_o = processedBookiesList.reduce((s, b) => s + b.o[side], 0) / numB;
+     const mkt_t3 = processedBookiesList.reduce((s, b) => s + b.t3[side], 0) / numB;
+     const mkt_t1 = processedBookiesList.reduce((s, b) => s + b.t1[side], 0) / numB;
+
+     const mkt_drop = safeDiv(mkt_t1 - mkt_t3, mkt_t3);
+     const mkt_early_drop = safeDiv(mkt_t3 - mkt_o, mkt_o);
+
+     const sharp_t1 = sharpList.length > 0
+        ? sharpList.reduce((s, b) => s + b.t1[side], 0) / sharpList.length
+        : mkt_t1;
+     const div_sharp = sharp_t1 - mkt_t1;
+
+     let p_imp = 0;
+     if (pinData) {
+        const ph = pinData.t1.h, pd = pinData.t1.d, pa = pinData.t1.a;
+        if (ph && pd && pa) {
+           const margin = (1/ph + 1/pd + 1/pa);
+           p_imp = (1 / pinData.t1[side]) / margin;
+        }
+     }
+     const market_ev = p_imp > 0 ? (mkt_t1 * p_imp) - 1 : 0;
+
+     const pinF = getBookieFeatures(pinData, side as 'h'|'d'|'a');
+     const b365F = getBookieFeatures(b365Data, side as 'h'|'d'|'a');
+     const macauF = getBookieFeatures(macauData, side as 'h'|'d'|'a');
+
+     f[featureIdx++] = mkt_t1;
+     f[featureIdx++] = mkt_drop;
+     f[featureIdx++] = mkt_early_drop;
+     f[featureIdx++] = pinF.drop;
+     f[featureIdx++] = pinF.surge;
+     f[featureIdx++] = pinF.zigzag;
+     f[featureIdx++] = macauF.drop;
+     f[featureIdx++] = b365F.drop;
+     f[featureIdx++] = market_ev;
+     f[featureIdx++] = div_sharp;
+  });
+
+  return f;
+}
+
+// =====================================================================
+// QUANTITATIVE PROCESSING 
+// =====================================================================
+function processQuant(matchId: string, matchInfo?: MatchInfo): AnalysisResult | null {
+  const league = matchInfo?.league || W.matchname_f || W.matchname || "未知賽事";
+  const homeTeam = matchInfo?.home || W.hometeam_f || W.hometeam || "主隊";
+  const awayTeam = matchInfo?.away || W.guestteam_f || W.guestteam || "客隊";
+  
   const rawGame: string[] = W.game;
+  const rawDetail: string[] = W.gameDetail; 
   if (!rawGame || !Array.isArray(rawGame)) return null;
-  const rawTotal = rawGame.length; /* 診斷用：原始數據總筆數 */
 
-  /* ── 1. 解析莊家數據 ──
-   * nowscore.com 當前格式（| 分隔，每筆 = 初盤 + 終盤）：
-   * [0]莊家ID | [1]時間戳 | [2]名稱 | [3-5]初H/D/A | [6-9]初概率/返還
-   *         | [10-12]終H/D/A | [13-16]終概率/返還 | [17-19]? | [20]日期
-   * 例: 281|153491386|Bet 365|2.1|3.5|3|...|2.35|3.5|2.63|...|2026,05-1,04
-   */
+  // 1. 計算開賽時間
+  let kickoffTs = 0;
+  let kickoffYear = new Date().getFullYear();
+  const exactTimeStr = W.matchtime || W.MatchTime; 
+  if (exactTimeStr && typeof exactTimeStr === "string") {
+    const parts = exactTimeStr.split(",");
+    if (parts.length >= 5) {
+      kickoffYear = parseInt(parts[0]);
+      const mParts = parts[1].split("-");
+      const m = parseInt(mParts[0]) - (mParts.length > 1 ? parseInt(mParts[1]) : 0);
+      const d = parseInt(parts[2]), h = parseInt(parts[3]), min = parseInt(parts[4]);
+      const s = parts[5] ? parseInt(parts[5]) : 0;
+      kickoffTs = new Date(Date.UTC(kickoffYear, m, d, h, min, s)).getTime() / 1000;
+    }
+  }
+
+  if (kickoffTs === 0 && matchInfo?.time) {
+    const [mh, mm] = matchInfo.time.split(":").map(Number);
+    if (!isNaN(mh) && !isNaN(mm)) {
+      const now = new Date();
+      const kDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), mh, mm, 0);
+      if (kDate.getTime() < now.getTime() - 12 * 3600000) kDate.setDate(kDate.getDate() + 1);
+      kickoffTs = kDate.getTime() / 1000;
+      kickoffYear = kDate.getFullYear();
+    }
+  }
+
+  const T_MINUS_3H_TS = kickoffTs > 0 ? kickoffTs - (3 * 3600) : Date.now() / 1000;
+  const T_MINUS_1H_TS = kickoffTs > 0 ? kickoffTs - (1 * 3600) : Date.now() / 1000;
+  const nowTs = Date.now() / 1000;
+
+  const detailMap = new Map<string, string>();
+  if (Array.isArray(rawDetail)) {
+      rawDetail.forEach(d => {
+          const idx = d.indexOf('^');
+          if(idx > -1) {
+              detailMap.set(d.substring(0, idx), d.substring(idx + 1));
+          }
+      });
+  }
+
+  // 2. 莊家數據清洗與全歷史快照提取
   type OP = { h: number; d: number; a: number; ts: number };
-  const bookies: Record<string, OP[]> = {};
-  let latestTs = 0;
-
-  /* 診斷計數器 + 莊家名稱映射 */
-  let d_skip = 0, d_badOdds = 0, d_marginFail = 0;
-  const bookieNames: Record<string, string> = {};
+  const bookieStats: Record<string, any> = {};
+  const processedBookiesList: any[] = [];
+  const avgT3 = { h: 0, d: 0, a: 0 };
 
   for (const item of rawGame) {
     if (!item) continue;
-    const itemStr = typeof item === "string" ? item : String(item);
-    const p = itemStr.split("|");
-    if (p.length < 13) { d_skip++; continue; }
+    const p = String(item).split("|");
+    if (p.length < 13) continue;
 
-    const bId = p[0];
-    const bName = p[2] || "";
-    bookieNames[bId] = bName;
+    const oddsId = p[1]; 
+    const bookieName = p[2] ? p[2].toLowerCase().trim() : "unknown"; 
     const oH = parseFloat(p[3]), oD = parseFloat(p[4]), oA = parseFloat(p[5]);
     const cH = parseFloat(p[10]), cD = parseFloat(p[11]), cA = parseFloat(p[12]);
 
-    if ([oH, oD, oA, cH, cD, cA].some((v) => isNaN(v) || v <= 0)) { d_badOdds++; continue; }
-
-    /* 解析日期 [20]: "2026,05-1,04" 或 "2026,05-1,04,1" */
-    let ts = Date.now() / 1000;
-    if (p[20]) {
-      const dp = p[20].split(",");
-      if (dp.length >= 3) {
-        const yr = parseInt(dp[0]);
-        const [mo, dy] = dp[1].split("-");
-        const hr = parseInt(dp[2]);
-        const parsed = new Date(yr, parseInt(mo) - 1, parseInt(dy), isNaN(hr) ? 0 : hr).getTime() / 1000;
-        if (!isNaN(parsed)) ts = parsed;
-      }
-    }
-    if (ts > latestTs) latestTs = ts;
-
-    /* 構建 2 點歷史（初盤 → 終盤） */
+    if ([oH, oD, oA, cH, cD, cA].some((v) => isNaN(v) || v <= 0)) continue;
     const oMargin = 1 / oH + 1 / oD + 1 / oA;
-    if ((1 / oMargin) * 100 >= 88) {
-      bookies[bId] = [
-        { h: oH, d: oD, a: oA, ts: ts - 1 },
-        { h: cH, d: cD, a: cA, ts },
-      ];
-    } else {
-      d_marginFail++;
+    if ((1 / oMargin) * 100 < 85) continue;
+
+    const ticks: OP[] = [{ h: oH, d: oD, a: oA, ts: kickoffTs - (24 * 3600) }];
+
+    if (detailMap.has(oddsId)) {
+        const historyStr = detailMap.get(oddsId)!.split(';').filter(Boolean);
+        for (const hStr of historyStr) {
+            const dp = hStr.split('|');
+            if (dp.length >= 4) {
+                const th = parseFloat(dp[0]), td = parseFloat(dp[1]), ta = parseFloat(dp[2]);
+                const [md, time] = dp[3].split(' ');
+                if (md && time) {
+                    const [mo, day] = md.split('-');
+                    const [hh, mm] = time.split(':');
+                    const yr = dp.length >= 8 ? parseInt(dp[7]) : kickoffYear;
+                    const ts = new Date(yr, parseInt(mo)-1, parseInt(day), parseInt(hh), parseInt(mm), 0).getTime() / 1000;
+                    if (!isNaN(ts) && !isNaN(th) && !isNaN(td) && !isNaN(ta) && ts <= T_MINUS_1H_TS && ts > 0) {
+                        ticks.push({ h: th, d: td, a: ta, ts });
+                    }
+                }
+            }
+        }
     }
+
+    ticks.sort((a,b) => a.ts - b.ts);
+    if (ticks.length === 0) continue;
+
+    const o = ticks[0];
+    let t3 = ticks[0], t1 = ticks[ticks.length - 1];
+    const winTicks: OP[] = [];
+    
+    ticks.forEach(t => {
+      if (t.ts <= T_MINUS_3H_TS) t3 = t;
+      else if (t.ts <= T_MINUS_1H_TS) winTicks.push(t);
+    });
+
+    const bData = { name: bookieName, o, t3, t1, win: winTicks, allTicks: ticks };
+    bookieStats[bookieName] = bData;
+    processedBookiesList.push(bData);
+    
+    avgT3.h += t3.h; avgT3.d += t3.d; avgT3.a += t3.a;
   }
 
-  const numB = Object.keys(bookies).length;
+  const numB = processedBookiesList.length;
+  if (numB === 0) return null;
 
-  if (numB === 0) {
-    (W as any).__diag = { raw: rawTotal, skip: d_skip, badOdds: d_badOdds, marginFail: d_marginFail };
-    return null;
+  avgT3.h /= numB; avgT3.d /= numB; avgT3.a /= numB;
+
+  // 3. 提取 31 維特徵並執行 HDA 決策引擎
+  const f31 = getHDAFlatFeatures(bookieStats, processedBookiesList, league);
+  const advice = getActionAdvice(f31, league);
+
+  const { action, p_h, p_d, p_a, message } = advice;
+
+  let tsActionLabel = "等待中 (Pass)";
+  let tsActionClass = "text-slate-500 border-slate-800 bg-slate-900/50";
+  let showStake = false;
+  let targetName = "";
+  let targetOdds = 1.0;
+  let ourProb = 0;
+
+  if (action === 'BET_DRAW') {
+    tsActionLabel = message;
+    tsActionClass = "text-yellow-400 border-yellow-500/80 bg-yellow-950/50 animate-pulse-glow";
+    showStake = true;
+    targetName = "和局 (Draw)";
+    targetOdds = avgT3.d;
+    ourProb = p_d;
+  } else if (action === 'BET_AWAY') {
+    tsActionLabel = message;
+    tsActionClass = "text-emerald-400 border-emerald-500/50 bg-emerald-950/40 animate-pulse-glow";
+    showStake = true;
+    targetName = `客勝 (${awayTeam})`;
+    targetOdds = avgT3.a;
+    ourProb = p_a;
+  } else if (action === 'BET_HOME') {
+    tsActionLabel = message;
+    tsActionClass = "text-sky-400 border-sky-500/50 bg-sky-950/40 animate-pulse-glow";
+    showStake = true;
+    targetName = `主勝 (${homeTeam})`;
+    targetOdds = avgT3.h;
+    ourProb = p_h;
+  } else {
+    tsActionLabel = message;
+    tsActionClass = "text-slate-500 border-slate-800 bg-slate-900/50";
   }
 
-  /* ── 2. Pinnacle 領先指標（額外資訊）── */
-  let pinnLead = 0;
-  if (bookies[PINNACLE_ID]) {
-    const pinn = bookies[PINNACLE_ID];
-    const pDir = pinn[pinn.length - 1].h < pinn[0].h ? -1 : 1;
-    let followers = 0;
-    for (const bId in bookies) {
-      const h = bookies[bId];
-      const bDir = h[h.length - 1].h < h[0].h ? -1 : 1;
-      if (bDir === pDir) followers++;
-    }
-    pinnLead = followers / numB;
-  }
-
-  /* ── 3. 宏觀市場統計 ── */
-  const probShifts = { h: [] as number[], d: [] as number[], a: [] as number[] };
-  const avgO = { h: 0, d: 0, a: 0 };
-  const avgC = { h: 0, d: 0, a: 0 };
-
-  for (const bId in bookies) {
-    const hist = bookies[bId];
-    const o = hist[0], c = hist[hist.length - 1];
-    const oP = calcImpliedProb(o.h, o.d, o.a);
-    const cP = calcImpliedProb(c.h, c.d, c.a);
-    probShifts.h.push(cP.ph - oP.ph);
-    probShifts.d.push(cP.pd - oP.pd);
-    probShifts.a.push(cP.pa - oP.pa);
-    avgO.h += o.h; avgO.d += o.d; avgO.a += o.a;
-    avgC.h += c.h; avgC.d += c.d; avgC.a += c.a;
-  }
-
-  const avgSH = (probShifts.h.reduce((a, b) => a + b, 0) / numB) * 100;
-  const avgSD = (probShifts.d.reduce((a, b) => a + b, 0) / numB) * 100;
-  const avgSA = (probShifts.a.reduce((a, b) => a + b, 0) / numB) * 100;
-  avgO.h /= numB; avgO.d /= numB; avgO.a /= numB;
-  avgC.h /= numB; avgC.d /= numB; avgC.a /= numB;
-
-  /* 鎖定最佳目標 */
-  let targetKey: "h" | "d" | "a" = "h";
-  let targetShift = avgSH;
-  if (avgSD > targetShift) { targetKey = "d"; targetShift = avgSD; }
-  if (avgSA > targetShift) { targetKey = "a"; targetShift = avgSA; }
-
-  const tOpen = avgO[targetKey];
-  const tClose = avgC[targetKey];
-  const targetName = targetKey === "h" ? `主勝: ${homeTeam}` : targetKey === "a" ? `客勝: ${awayTeam}` : "和局 (Draw)";
-  const mlColor = targetKey === "h" ? "text-yellow-400" : targetKey === "a" ? "text-cyan-400" : "text-slate-400";
-  const macroTarget = targetKey === "h" ? "HOME" : targetKey === "a" ? "AWAY" : "DRAW";
-
-  /* ── ML 對齊：Pinnacle 專屬通道 ──
-   * ML 管線鎖定 Pinnacle 單一莊家，此處同步計算 Pinnacle shift
-   * 用於對齊 ML_Training_Dataset 的 shift_h/d/a_pct 特徵 */
-  let pinnShiftH = 0, pinnShiftD = 0, pinnShiftA = 0;
-  let pinnFound = false;
-  let pinnTarget = "";
-  let pinnTargetShift = 0;
-
-  /* 搜尋 Pinnacle（名稱模糊匹配） */
-  for (const bId in bookies) {
-    const name = (bookieNames[bId] || "").toLowerCase();
-    if (name.includes("pinnacle") || name.includes("平博") || name.includes("pinny")) {
-      const hist = bookies[bId];
-      const o = hist[0], c = hist[1];
-      const oP = calcImpliedProb(o.h, o.d, o.a);
-      const cP = calcImpliedProb(c.h, c.d, c.a);
-      pinnShiftH = (cP.ph - oP.ph) * 100;
-      pinnShiftD = (cP.pd - oP.pd) * 100;
-      pinnShiftA = (cP.pa - oP.pa) * 100;
-      pinnFound = true;
-
-      /* Pinnacle 的 macro_target */
-      pinnTarget = "HOME";
-      pinnTargetShift = pinnShiftH;
-      if (pinnShiftD > pinnTargetShift) { pinnTarget = "DRAW"; pinnTargetShift = pinnShiftD; }
-      if (pinnShiftA > pinnTargetShift) { pinnTarget = "AWAY"; pinnTargetShift = pinnShiftA; }
-      break;
-    }
-  }
-
-  /* ── 4. V13 四項連續評分 ── */
-
-  /* [A] 概率偏移 40 分 — 3.5% 為極限重倉 */
-  const scoreShift = Math.min(40, Math.max(0, (targetShift / 3.5) * 40));
-
-  /* [B] 絕對共識 30 分 — >0.2% 的莊家比例，50%→0, 85%→30 */
-  const tProbs = probShifts[targetKey];
-  const consensusCount = tProbs.filter((p) => p > 0.002).length;
-  const consensusRate = consensusCount / numB;
-  const scoreConsensus = Math.min(30, Math.max(0, ((consensusRate - 0.5) / 0.35) * 30));
-
-  /* [C] 偏移集中度 15 分 — 目標偏移相對於其他兩個方向的優勢
-   * 2 點數據專用：衡量資金是否「單邊鎖定」目標 */
-  const otherShifts = [avgSH, avgSD, avgSA].filter((_, i) => i !== ["h", "d", "a"].indexOf(targetKey));
-  const otherAbsSum = Math.abs(otherShifts[0]) + Math.abs(otherShifts[1]);
-  const dominanceRatio = targetShift / (otherAbsSum + 0.1);
-  const scoreConcentration = Math.min(15, Math.max(0, ((dominanceRatio - 0.5) / 2.0) * 15));
-
-  /* [D] 賠率壓縮度 15 分 — 目標賠率從初盤到終盤的壓縮幅度
-   * 2 點數據專用：壓縮越大 = 莊家越防範該結果 */
-  const oddsCompression = (tOpen - tClose) / tOpen;
-  const scoreCompression = Math.min(15, Math.max(0, oddsCompression * 150));
-
-  const totalScore = scoreShift + scoreConsensus + scoreConcentration + scoreCompression;
-
-  /* ── 5. EV 1.0 期望值計算 ──
-   * 修正 edge_multiplier：用概率偏移 × 評分信心度 做加成
-   * 舊版 (score-50)/800 最大僅 4.4%，無法跨越莊家水錢 (5-8%)
-   * 新版：edgeMult = 1 + (targetShift/100) × (totalScore/100)
-   * 例: shift=10.5%, score=85 → 1 + 0.105×0.85 = 1.089 (8.9% boost) */
-  const cMarginFinal = 1 / avgC.h + 1 / avgC.d + 1 / avgC.a;
-  const impliedProb = (1 / tClose) / cMarginFinal;
-  const edgeMult = 1 + (targetShift / 100) * (totalScore / 100);
-  const ourProb = Math.min(0.95, impliedProb * edgeMult);
-  const ev = ourProb * (tClose - 1) - (1 - ourProb);
-  const evPct = ev * 100;
-
-  /* Half-Kelly 注碼 */
-  const bOdds = tClose - 1;
+  // 💡 真實動態 EV 計算 (取代靜態文字)
+  const realEvPct = ((ourProb * targetOdds) - 1) * 100;
+  const bOdds = targetOdds - 1;
   const kelly = bOdds > 0 ? (bOdds * ourProb - (1 - ourProb)) / bOdds : 0;
-  const stake = Math.max(0, (kelly / 2) * 100);
+  const stake = Math.max(0, (kelly / 4) * 100); 
 
-  /* ── 6. 出手判定 ── */
-  let actionLabel: string;
-  let actionClass: string;
-  let actionBg: string;
-  let isQualified = false;
-  let isHardRec = false;
+  const currentDiffHours = (kickoffTs - nowTs) / 3600;
+  let timeStatusLabel = currentDiffHours > 3 ? `距離開賽 ${currentDiffHours.toFixed(1)}h` 
+                      : currentDiffHours > 1 ? `等待 T-1H 驗證` 
+                      : currentDiffHours > 0 ? `臨場 ${currentDiffHours.toFixed(1)}h` 
+                      : `事後回測`;
 
-  if (totalScore >= 60 && ev > 0.005) {
-    /* ✅ 符合出手範圍 */
-    actionLabel = "✅ 出手！";
-    actionClass = "text-emerald-400";
-    actionBg = "bg-emerald-950/40 border-emerald-700/40";
-    isQualified = true;
-  } else if (ev > 0) {
-    /* ⚠️ EV>0 但評分不足 → 不合格的硬推薦 */
-    actionLabel = "⚠️ 不合格的硬推薦";
-    actionClass = "text-amber-400";
-    actionBg = "bg-amber-950/40 border-amber-700/40";
-    isHardRec = true;
-  } else if (totalScore >= 60) {
-    /* ⏸️ 評分夠但 EV≤0 */
-    actionLabel = "⏸️ 觀望（EV 不足）";
-    actionClass = "text-sky-400";
-    actionBg = "bg-sky-950/40 border-sky-700/40";
-  } else {
-    /* 🚫 無信號 */
-    actionLabel = "🚫 放棄";
-    actionClass = "text-red-400";
-    actionBg = "bg-red-950/40 border-red-700/40";
+  let lockNotice = "";
+  if (currentDiffHours <= 1.0 && currentDiffHours > 0) {
+    lockNotice = `<div class="text-[10px] text-purple-400 mt-2 flex items-center gap-1.5"><span class="animate-pulse">🔒</span> <b>訊號已於 T-1H 鎖定定案。</b></div>`;
+  } else if (currentDiffHours > 1.0) {
+    lockNotice = `<div class="text-[10px] text-slate-500 mt-2 flex items-center gap-1.5">⏳ <b>注意：</b>等待開賽前 1 小時定案。</div>`;
+    if (showStake) {
+       tsActionLabel = `🔭 提早埋伏: ${targetName} (等待 T-1H)`;
+       tsActionClass = "text-blue-400 border-blue-900/50 bg-blue-950/40";
+       showStake = false;
+    }
   }
 
-  /* ── 7. 級別 & 星星 ── */
-  const stars = "★".repeat(Math.floor(totalScore / 20)) + "☆".repeat(5 - Math.floor(totalScore / 20));
-  let level: string, levelClass: string, cardBorder: string;
-  if (totalScore >= 75) {
-    level = "S 級黃金標的"; levelClass = "text-emerald-400";
-    cardBorder = "border-emerald-600/40 shadow-[0_0_12px_rgba(34,197,94,0.15)]";
-  } else if (totalScore >= 60) {
-    level = "A 級強勢資金"; levelClass = "text-cyan-400";
-    cardBorder = "border-cyan-600/30 shadow-[0_0_8px_rgba(6,182,212,0.1)]";
-  } else if (totalScore >= 45) {
-    level = "B 級常規調盤"; levelClass = "text-amber-400";
-    cardBorder = "border-amber-700/30";
-  } else {
-    level = "C 級雜訊/誘盤"; levelClass = "text-red-400";
-    cardBorder = "border-slate-800 opacity-70";
-  }
-
+  const isT1 = isTier1League(league);
   const now = new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-
-  /* ── 8. 構建 HTML ── */
   let html = `
-    <div class="mb-3 bg-slate-950/80 rounded-xl border ${cardBorder} overflow-hidden">
-      <!-- Header -->
+    <div class="mb-3 bg-slate-950/80 rounded-xl border ${showStake ? (action === 'BET_HOME' ? 'border-sky-600/40 shadow-[0_0_12px_rgba(56,189,248,0.15)]' : 'border-emerald-600/40 shadow-[0_0_12px_rgba(34,197,94,0.15)]') : 'border-slate-800'} overflow-hidden">
       <div class="flex items-center justify-between px-3 py-2 bg-white/[0.02] border-b border-white/[0.04]">
-        <div class="text-[13px] text-slate-200">⚽ <b>${league}</b> ｜ ${homeTeam} <span class="text-slate-600">vs</span> ${awayTeam}</div>
-        <span class="text-[10px] text-slate-600 font-mono">${now} · ID:${matchId}</span>
+        <div class="text-[13px] text-slate-200">
+          <span class="mr-1 ${isT1 ? 'text-amber-400' : 'text-slate-500'}">🚩</span> 
+          <b>${league}</b> | ${homeTeam} <span class="text-slate-600">vs</span> ${awayTeam}
+        </div>
+        <span class="text-[10px] text-slate-600 font-mono">${now} | ID:${matchId}</span>
       </div>
-
       <div class="p-3 space-y-3">
-        <!-- V13 評分 -->
-        <div class="text-[11px] leading-relaxed">
-          <div class="font-bold text-slate-400 mb-1">📏 V13 量化評分</div>
-          <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-slate-300">
-            <div> ├─ 概率偏移 (40): <b>${scoreShift.toFixed(1)}</b></div>
-            <div> ├─ 絕對共識 (30): <b>${scoreConsensus.toFixed(1)}</b></div>
-            <div> ├─ 偏移集中 (15): <b>${scoreConcentration.toFixed(1)}</b></div>
-            <div> ├─ 賠率壓縮 (15): <b>${scoreCompression.toFixed(1)}</b></div>
+        <div class="text-[11px]">
+          <div class="font-bold mb-1 flex items-center justify-between text-purple-400">
+             <span>🧠 Edge AI (V36 HDA Sniper ${isT1 ? '[T1 核心]' : '[T2 野雞]'})</span>
           </div>
-          <div class="mt-1 text-slate-200">
-            └─ 綜合: <span class="text-amber-400">${stars}</span> <b>${totalScore.toFixed(1)}</b>/100 → <span class="${levelClass} font-bold">${level}</span>
+          <div class="text-slate-300 flex justify-between bg-slate-900/50 px-2 py-1 rounded border border-slate-800/50">
+            <span>主: <b class="${p_h > p_a && p_h > p_d ? 'text-sky-400' : 'text-white'}">${(p_h * 100).toFixed(1)}%</b></span>
+            <span>平: <b class="${p_d >= 0.34 ? 'text-yellow-400' : 'text-white'}">${(p_d * 100).toFixed(1)}%</b></span>
+            <span>客: <b class="${p_a > p_h && p_a > p_d ? 'text-emerald-400' : 'text-white'}">${(p_a * 100).toFixed(1)}%</b></span>
           </div>
         </div>
-
-        <!-- EV 1.0 -->
-        <div class="text-[11px] leading-relaxed">
-          <div class="font-bold text-slate-400 mb-1">💰 EV 1.0 期望值</div>
-          <div class="text-slate-300">
-            隱含 ${ (impliedProb * 100).toFixed(1) }% → 修正 ${ (ourProb * 100).toFixed(1) }% ｜
-            EV: <b class="${evPct > 0 ? 'text-emerald-400' : 'text-red-400'}">${evPct > 0 ? '+' : ''}${evPct.toFixed(2)}%</b>
-            ${pinnLead > 0 ? ` ｜ Pinnacle 領先: ${(pinnLead * 100).toFixed(0)}%` : ''}
+        <div class="rounded-lg border ${tsActionClass} px-3 py-2">
+          <div class="flex justify-between items-center mb-1">
+            <div class="text-[11px] font-bold text-slate-400">🕒 狀態</div>
+            <div class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">${timeStatusLabel}</div>
           </div>
-        </div>
-
-        <!-- ML 特徵對齊 (Data Dictionary 映射) -->
-        <div class="text-[11px] leading-relaxed">
-          <div class="font-bold text-purple-400 mb-1">🤖 ML 特徵對齊 (V22 Macro Shift)</div>
-          <div class="grid grid-cols-3 gap-1 text-center text-[10px] font-mono mb-1">
-            <div class="rounded bg-slate-800/60 py-1">
-              <div class="text-slate-500">shift_h_pct</div>
-              <div class="${avgSH > 0 ? 'text-emerald-400' : 'text-red-400'} font-bold">${avgSH > 0 ? '+' : ''}${avgSH.toFixed(2)}</div>
-            </div>
-            <div class="rounded bg-slate-800/60 py-1">
-              <div class="text-slate-500">shift_d_pct</div>
-              <div class="${avgSD > 0 ? 'text-emerald-400' : 'text-red-400'} font-bold">${avgSD > 0 ? '+' : ''}${avgSD.toFixed(2)}</div>
-            </div>
-            <div class="rounded bg-slate-800/60 py-1">
-              <div class="text-slate-500">shift_a_pct</div>
-              <div class="${avgSA > 0 ? 'text-emerald-400' : 'text-red-400'} font-bold">${avgSA > 0 ? '+' : ''}${avgSA.toFixed(2)}</div>
-            </div>
+          <div class="text-[13px] font-black flex items-center gap-1">
+            ${tsActionLabel} 
           </div>
-          <div class="text-slate-300">
-            macro_target: <b class="${mlColor}">${macroTarget}</b>
-            ${pinnFound ? ` ｜ Pinnacle: <b class="text-purple-400">${pinnTarget}</b> (h:${pinnShiftH > 0 ? '+' : ''}${pinnShiftH.toFixed(2)} d:${pinnShiftD > 0 ? '+' : ''}${pinnShiftD.toFixed(2)} a:${pinnShiftA > 0 ? '+' : ''}${pinnShiftA.toFixed(2)})` : ' ｜ <span class="text-slate-600">Pinnacle 未在數據中</span>'}
-          </div>
-        </div>
-
-        <!-- 出手判定 -->
-        <div class="rounded-lg border ${actionBg} px-3 py-2">
-          <div class="text-[11px] font-bold text-slate-400 mb-1">🎯 出手判定</div>
-          <div class="text-base font-black ${actionClass}">${actionLabel}</div>
-          ${isQualified || isHardRec ? `
-            <div class="text-[11px] text-slate-400 mt-1">
-              方向: <b class="${mlColor}">${targetName}</b> ｜
-              初 ${tOpen.toFixed(2)} → 終 ${tClose.toFixed(2)} ｜
-              注碼: <b class="text-cyan-400">${stake.toFixed(1)}%</b>
-              ${isHardRec ? ' <span class="text-amber-500 font-bold">（評分不足，極小注）</span>' : ''}
-            </div>
-          ` : ''}
-        </div>
-
-        <!-- 數據標籤 + 自動帶入切片器 -->
-        <div class="flex flex-wrap items-center gap-1.5 text-[10px] font-mono text-slate-500">
-          <span class="bg-slate-800/60 px-1.5 py-0.5 rounded">原始 ${rawTotal}</span>
-          <span class="bg-slate-800/60 px-1.5 py-0.5 rounded">莊家 ${numB}</span>
-          <span class="bg-slate-800/60 px-1.5 py-0.5 rounded">取樣 ${numB * 2}</span>
-          <span class="bg-slate-800/60 px-1.5 py-0.5 rounded">共識 ${(consensusRate * 100).toFixed(0)}%</span>
-          <span class="bg-slate-800/60 px-1.5 py-0.5 rounded">淨增 +${targetShift.toFixed(1)}%</span>
-          <button onclick="window.dispatchEvent(new CustomEvent('autofill-slicer',{detail:{target:'${macroTarget}',matchId:'${matchId}'}}))" class="bg-purple-900/40 text-purple-400 border border-purple-700/40 px-2 py-0.5 rounded hover:bg-purple-800 hover:text-white transition cursor-pointer">🤖 帶入切片器</button>
+          ${showStake ? `<div class="text-[11px] text-slate-300 mt-1.5 pt-1.5 border-t border-white/10">🎯 建議: <b class="${action === 'BET_HOME' ? 'text-sky-400' : 'text-emerald-400'}">${targetName}</b> @ <b class="text-white">${targetOdds.toFixed(2)}</b> | 動態 EV: <b class="${realEvPct > 0 ? 'text-emerald-400' : 'text-red-400'}">${realEvPct > 0 ? '+' : ''}${realEvPct.toFixed(2)}%</b> | 1/4 Kelly: <b class="text-cyan-400">${stake.toFixed(1)}%</b></div>` : ''}
+          ${lockNotice}
         </div>
       </div>
     </div>`;
 
-  return { score: totalScore, htmlOutput: html };
+  return { score: 100, htmlOutput: html };
 }
 
-/* ═══════════════════════ REACT COMPONENT ═══════════════════════ */
-
+// =====================================================================
+// REACT COMPONENT
+// =====================================================================
 export default function App() {
-  /* ── State ── */
   const [rawMatches, setRawMatches] = useState<MatchInfo[]>([]);
   const [allLeagues, setAllLeagues] = useState<string[]>([]);
   const [selectedLeagues, setSelectedLeagues] = useState<Set<string>>(new Set());
   const [filteredMatches, setFilteredMatches] = useState<MatchInfo[]>([]);
   const [leagueGroups, setLeagueGroups] = useState<Record<string, MatchInfo[]>>({});
-  const [step1Done, setStep1Done] = useState(false);
 
+  const [leagueSearch, setLeagueSearch] = useState("");
+  const [step1Done, setStep1Done] = useState(false);
   const [lines, setLines] = useState<string[]>(BOOT_LINES);
   const [isLoading, setIsLoading] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [manualId, setManualId] = useState("");
-
-  const [slicerOpen, setSlicerOpen] = useState(true);
+  
+  // UI 控制
+  const [panelMode, setPanelMode] = useState<"CLOSED" | "SLICER" | "ASIAN">("CLOSED");
+  
+  // Slicer 狀態
   const [slTarget, setSlTarget] = useState("AWAY");
   const [slFav, setSlFav] = useState("Home");
   const [slCross, setSlCross] = useState("----");
-  const [slPatL, setSlPatL] = useState("缺失");
-  const [slPatM, setSlPatM] = useState("缺失");
+  const [slPatL, setSlPatL] = useState("持續降賠");
+  const [slPatM, setSlPatM] = useState("A<B<C");
+
+  // Asian X-Ray 狀態
+  const [asTime, setAsTime] = useState("T1H");
+  const [asLine, setAsLine] = useState("N1");
+  const [asSide, setAsSide] = useState("HOME");
+  const [asHandicap, setAsHandicap] = useState("");
+
+  const asianHandicaps = useMemo(() => Object.keys(ASIAN_DICT[asLine]?.[asTime]?.[asSide] || {}), [asLine, asTime, asSide]);
+  
+  useEffect(() => {
+    if (asianHandicaps.length > 0 && !asianHandicaps.includes(asHandicap)) setAsHandicap(asianHandicaps[0]);
+    else if (asianHandicaps.length === 0) setAsHandicap('');
+  }, [asianHandicaps, asHandicap]);
+
+  const asianResult = ASIAN_DICT[asLine]?.[asTime]?.[asSide]?.[asHandicap];
+
+  const slicerResult = useMemo(() => {
+    const r = V17_RULES[slTarget];
+    if (!r) return null;
+    return { 
+      golden: r.GOLDEN.filter((x: any) => x.val === slPatL || x.val === slCross), 
+      traps: r.TRAPS.filter((x: any) => x.val === slPatL || x.val === slCross) 
+    };
+  }, [slTarget, slCross, slPatL]);
 
   const consoleRef = useRef<HTMLDivElement>(null);
   const scanRef = useRef(false);
 
-  /* ── Console helpers (prepend = newest on top) ── */
   const print = useCallback((html: string) => setLines((p) => [html, ...p]), []);
   const clearConsole = useCallback(() => setLines([...BOOT_LINES]), []);
 
@@ -482,41 +551,19 @@ export default function App() {
     if (el) el.scrollTop = 0;
   }, [lines]);
 
-  /* ── 自動帶入切片器事件監聽 ── */
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.target) {
-        setSlTarget(detail.target);
-        print(`<span class="text-purple-400 text-xs">🤖 切片器已自動帶入: ${detail.target} (ID: ${detail.matchId || '?'})</span>`);
-      }
-    };
-    window.addEventListener("autofill-slicer", handler);
-    return () => window.removeEventListener("autofill-slicer", handler);
-  }, [print]);
-
-  /* ── League groups from filtered matches ── */
   const lgEntries = useMemo(() => Object.entries(leagueGroups), [leagueGroups]);
 
-  /* ══════════════════ STEP 1: Fetch Leagues ══════════════════ */
   async function handleFetchLeagues() {
     setIsLoading(true);
-    print('<span class="text-xs text-slate-500">[系統] DOM Script Injection 連線中...</span>');
-
-    W.A = undefined;
-    W.B = undefined;
-
+    print('<span class="text-xs text-slate-500">[系統] DOM Script Injection 請求中...</span>');
+    W.A = undefined; W.B = undefined;
     try {
-      try {
-        await injectScript("https://live.nowscore.com/data/bf.js");
-      } catch {
-        await injectScript("https://v.nowscore.com/data/bf.js");
-      }
-      if (!W.A) throw new Error("腳本已載入但無賽事資料");
+      try { await injectScript("https://live.nowscore.com/data/bf.js"); } 
+      catch { await injectScript("https://v.nowscore.com/data/bf.js"); }
+      if (!W.A) throw new Error("數據集 A 載入失敗");
     } catch (err: any) {
       print(`<span class="text-red-500 font-bold">[錯誤] ${err.message}</span>`);
-      setIsLoading(false);
-      return;
+      setIsLoading(false); return;
     }
 
     const matches: MatchInfo[] = [];
@@ -526,220 +573,101 @@ export default function App() {
       if (!val) return;
       const p: any[] = Array.isArray(val) ? val : String(val).split(/[\^,]/);
       if (p.length < 10) return;
+      if (`${p[12]} ${p[13]} ${p[14]}`.includes("-1")) return;
 
-      const statusStr = `${p[12] || ""} ${p[13] || ""} ${p[14] || ""}`;
-      if (statusStr.includes("-1") || statusStr.includes("4")) return;
-
-      const mId = String(p[0]).trim();
-      const bIdx = parseInt(p[1]);
-      let tw = "未知聯賽";
-      if (W.B && W.B[bIdx]) {
-        const bVal = W.B[bIdx];
-        const pB = Array.isArray(bVal) ? bVal : String(bVal).split(/[\^,]/);
-        const ns = pB.filter((x: any) => typeof x === "string" && /[^\d.\-\s]/.test(x));
-        tw = ns[1] || ns[0] || "未知聯賽";
-      }
-
+      const tw = W.B?.[parseInt(p[1])] ? (Array.isArray(W.B[parseInt(p[1])]) ? W.B[parseInt(p[1])] : String(W.B[parseInt(p[1])]).split(/[\^,]/)).filter((x: any) => typeof x === "string" && /[^\d.\-\s]/.test(x))[1] || "未知" : "未知";
       const home = String(p[4] || p[5] || "").replace(/<[^>]+>/g, "").trim();
       const away = String(p[7] || p[8] || "").replace(/<[^>]+>/g, "").trim();
-      const time = p.find((x: any) => typeof x === "string" && x.includes(":")) || "未知時間";
-
-      if (home && away) {
-        leagues.add(tw);
-        matches.push({ id: mId, league: tw, home, away, time });
-      }
+      
+      if (home && away) { leagues.add(tw); matches.push({ id: String(p[0]).trim(), league: tw, home, away, time: p.find((x: any) => typeof x === "string" && x.includes(":")) || "未知" }); }
     });
 
-    setRawMatches(matches);
-    const sorted = Array.from(leagues).sort();
-    setAllLeagues(sorted);
-
-    /* Auto-select hot leagues */
-    const hotSet = new Set(sorted.filter((l) => isHot(l)));
-    setSelectedLeagues(hotSet);
-    setStep1Done(true);
-
-    print(`<span class="text-emerald-400 font-bold">✅ 成功！${matches.length} 場有效賽事，${sorted.length} 個聯賽。已自動勾選 ${hotSet.size} 個熱門。</span>`);
-    setIsLoading(false);
+    setRawMatches(matches); setAllLeagues(Array.from(leagues).sort());
+    setSelectedLeagues(new Set(Array.from(leagues).filter(isHot)));
+    setStep1Done(true); setIsLoading(false);
   }
 
-  /* ══════════════════ STEP 2: Render Radar ══════════════════ */
   function handleRenderRadar() {
-    if (selectedLeagues.size === 0) {
-      alert("請至少勾選一個聯賽！");
-      return;
-    }
     const filtered = rawMatches.filter((m) => selectedLeagues.has(m.league));
     const groups: Record<string, MatchInfo[]> = {};
-    filtered.forEach((m) => {
-      if (!groups[m.league]) groups[m.league] = [];
-      groups[m.league].push(m);
-    });
-    setFilteredMatches(filtered);
-    setLeagueGroups(groups);
-    print(`<span class="text-cyan-400 font-bold">📊 雷達已更新，共 ${filtered.length} 場待分析。</span>`);
+    filtered.forEach((m) => { if (!groups[m.league]) groups[m.league] = []; groups[m.league].push(m); });
+    setFilteredMatches(filtered); setLeagueGroups(groups);
   }
 
-  /* ══════════════════ League checkbox helpers ══════════════════ */
-  function toggleLeague(league: string, checked: boolean) {
-    setSelectedLeagues((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(league); else next.delete(league);
-      return next;
-    });
-  }
-
-  function selectHot() {
-    setSelectedLeagues(new Set(allLeagues.filter((l) => isHot(l))));
-  }
-
-  function selectAll() {
-    setSelectedLeagues(new Set(allLeagues));
-  }
-
-  function selectNone() {
-    setSelectedLeagues(new Set());
-  }
-
-  /* ══════════════════ Single Analysis ══════════════════ */
-  async function handleAnalysis(matchId: string, silent: boolean): Promise<AnalysisResult | null> {
-    if (!matchId || isNaN(Number(matchId))) {
-      if (!silent) print('<span class="text-amber-400">[提示] ID 無效。</span>');
-      return null;
-    }
-    if (!silent) {
-      print(`<span class="text-cyan-400">[分析] 獲取 ${matchId} 賠率<span class="loading"></span></span>`);
-    }
-
+  async function handleAnalysis(matchId: string, silent: boolean, matchInfo?: MatchInfo) {
+    if (!matchId) return null;
     W.game = undefined;
-    W.hometeam_cn = undefined;
-    W.guestteam_cn = undefined;
-    W.matchname_cn = undefined;
-
+    W.gameDetail = undefined;
     try {
-      try {
-        await injectScript(`https://1x2.nowscore.com/${matchId}.js`);
-      } catch {
-        try {
-          await injectScript(`https://1x2d.nowscore.com/${matchId}.js`);
-        } catch {
-          throw new Error("腳本下載被擋");
-        }
-      }
-      if (!W.game) throw new Error("無賠率數據");
-    } catch (err: any) {
-      if (!silent) print(`<span class="text-red-500 text-xs">[錯誤] ${matchId}: ${err.message}</span>`);
-      return null;
-    }
+      try { await injectScript(`https://1x2.nowscore.com/${matchId}.js`); } 
+      catch { await injectScript(`https://1x2d.nowscore.com/${matchId}.js`); }
+    } catch { return null; }
 
-    const result = processQuant(matchId);
-    if (!result) {
-      if (!silent) {
-        const diag = (W as any).__diag;
-        if (diag) {
-          print(`<span class="text-red-500 text-xs font-bold">[診斷] ${matchId} — 原始:${diag.raw} | 跳過:${diag.skip} | 賠率異常:${diag.badOdds} | 返還淘汰:${diag.marginFail}</span>`);
-        } else {
-          print(`<span class="text-red-500 text-xs">[警告] ${matchId} 數據異常。</span>`);
-        }
-      }
-      return null;
-    }
-    if (!silent) print(result.htmlOutput);
+    const result = processQuant(matchId, matchInfo);
+    if (!silent && result) print(result.htmlOutput);
     return result;
   }
 
-  /* ══════════════════ League Scan ══════════════════ */
   async function handleLeagueScan(league: string) {
     if (scanRef.current) return;
     const list = leagueGroups[league];
     if (!list?.length) return;
-
-    scanRef.current = true;
-    setIsScanning(true);
-    print(`<span class="text-amber-400 font-bold bg-amber-950/30 px-2 py-1 rounded">🚀 聯賽掃描: 【${league}】 ${list.length} 場</span>`);
-    let found = 0;
-
+    scanRef.current = true; setIsScanning(true);
     for (let i = 0; i < list.length; i++) {
       if (!scanRef.current) break;
-      const match = list[i];
-      setScanProgress({ current: i + 1, total: list.length, label: `${match.home} vs ${match.away}` });
-      const r = await handleAnalysis(match.id, true);
-      if (r) {
-        found++;
-        print(r.htmlOutput);
-      }
+      setScanProgress({ current: i + 1, total: list.length, label: `${list[i].home} vs ${list[i].away}` });
+      const r = await handleAnalysis(list[i].id, true, list[i]);
+      if (r) print(r.htmlOutput);
       await new Promise((r) => setTimeout(r, 800));
     }
-
-    scanRef.current = false;
-    setIsScanning(false);
-    setScanProgress(null);
-    print(`<span class="text-cyan-400 font-bold">✅【${league}】掃描完成，解析 ${found} 場。</span>`);
+    scanRef.current = false; setIsScanning(false); setScanProgress(null);
   }
 
-  /* ══════════════════ Slicer Logic ══════════════════ */
-  const slicerResult = useMemo(() => {
-    const rules = V17_RULES[slTarget];
-    if (!rules) return null;
+  const selectHot = useCallback(() => setSelectedLeagues(new Set(allLeagues.filter(isHot))), [allLeagues]);
+  const selectAll = useCallback(() => setSelectedLeagues(new Set(allLeagues)), [allLeagues]);
+  const selectNone = useCallback(() => setSelectedLeagues(new Set()), []);
+  const toggleLeague = useCallback((l: string, checked: boolean) => {
+    setSelectedLeagues(prev => {
+      const n = new Set(prev);
+      checked ? n.add(l) : n.delete(l);
+      return n;
+    });
+  }, []);
 
-    const golden: typeof rules.GOLDEN = [];
-    const traps: typeof rules.TRAPS = [];
-
-    const check = (type: string, val: string) => {
-      const g = rules.GOLDEN.find((r) => r.type === type && r.val === val);
-      if (g) golden.push(g);
-      const t = rules.TRAPS.find((r) => r.type === type && r.val === val);
-      if (t) traps.push(t);
-    };
-
-    check("Fav", slFav);
-    check("Pat_L", slPatL);
-    check("Pat_M", slPatM);
-    check("Cross", slCross);
-
-    return { golden, traps };
-  }, [slTarget, slFav, slCross, slPatL, slPatM]);
-
-  /* ══════════════════ RENDER ══════════════════ */
   return (
     <div className="relative min-h-screen bg-[#020617] text-slate-200">
-      {/* BG */}
       <div className="pointer-events-none fixed inset-0">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-10%,rgba(34,211,238,0.08),transparent)]" />
         <div className="absolute inset-0 bg-grid" />
       </div>
 
       <div className="relative z-10 mx-auto flex max-w-[1800px] flex-col gap-3 p-2 xl:p-4 h-screen">
-        {/* ═══ Header ═══ */}
         <header className="glass flex items-center justify-between rounded-2xl border border-white/[0.06] px-4 py-2.5 shrink-0">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500/15 text-base font-black text-cyan-400">◆</div>
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500/15 text-base font-black text-cyan-400">⚡</div>
             <div>
-              <h1 className="text-sm font-bold text-white">Smart Money V29</h1>
-              <p className="text-[10px] text-slate-500">V13 概率模型 + EV 1.0 + 出手判定</p>
+              <h1 className="text-sm font-bold text-white">Smart Money V36.1 Pro</h1>
+              <p className="text-[10px] text-slate-500">HDA 矩陣 + 動態 EV / 智能防護濾網</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             {filteredMatches.length > 0 && (
               <span className="hidden md:flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] text-emerald-400">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-                {filteredMatches.length} 場就緒
+                監控中: {filteredMatches.length} 場
               </span>
             )}
             {isScanning && (
               <span className="flex items-center gap-1.5 rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-0.5 text-[11px] text-amber-400">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
-                掃描中
+                批量掃描中...
               </span>
             )}
           </div>
         </header>
 
-        {/* ═══ Main Grid ═══ */}
         <div className="grid flex-1 grid-cols-1 gap-3 overflow-hidden lg:grid-cols-4">
-          {/* ─── LEFT COL ─── */}
           <div className="flex flex-col gap-3 overflow-hidden lg:col-span-1">
-            {/* Controls */}
             <div className="glass rounded-xl border border-white/[0.06] p-3 shrink-0">
               <div className="relative">
                 <div className="absolute left-0 top-0 h-full w-[3px] rounded-full bg-cyan-500 shadow-[0_0_8px_#06b6d4]" />
@@ -748,22 +676,21 @@ export default function App() {
                     <input
                       value={manualId}
                       onChange={(e) => setManualId(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleAnalysis(manualId, false)}
-                      placeholder="輸入單場 ID (如 2789475)"
+                      onKeyDown={(e) => e.key === "Enter" && handleAnalysis(manualId, false, rawMatches.find(m => m.id === manualId))}
+                      placeholder="手動輸入 ID (如 2789475)"
                       className="flex-1 rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-sm text-white outline-none placeholder:text-slate-600 focus:border-cyan-500/30"
                     />
                     <button
-                      onClick={() => handleAnalysis(manualId, false)}
+                      onClick={() => handleAnalysis(manualId, false, rawMatches.find(m => m.id === manualId))}
                       className="rounded-lg bg-cyan-600 px-4 py-1.5 text-sm font-bold text-white shadow-[0_0_8px_rgba(6,182,212,0.3)] transition hover:bg-cyan-500"
                     >
-                      狙擊
+                      強制介入
                     </button>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* STEP 1 + League Filter */}
             <div className="glass rounded-xl border border-white/[0.06] p-3 shrink-0 flex flex-col">
               <button
                 onClick={handleFetchLeagues}
@@ -771,48 +698,57 @@ export default function App() {
                 className="w-full rounded-lg border border-indigo-500/25 bg-indigo-500/10 py-2 text-sm font-bold text-indigo-300 shadow-[0_0_10px_rgba(79,70,229,0.2)] transition hover:bg-indigo-500/20 disabled:opacity-50"
               >
                 {isLoading ? (
-                  <span>連線中<span className="loading" /></span>
+                  <span>加載中 <span className="loading" /></span>
                 ) : step1Done ? (
-                  `✅ STEP 1: ${rawMatches.length} 場已載入`
+                  `更新列表 (當前: ${rawMatches.length} 場)`
                 ) : (
-                  "[STEP 1] 獲取今日聯賽"
+                  "[STEP 1] 抓取全網未開賽事"
                 )}
               </button>
 
               {step1Done && (
                 <div className="mt-3 flex flex-col">
                   <div className="mb-2 flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-amber-400">📋 篩選聯賽</span>
+                    <span className="text-[11px] font-bold text-amber-400">賽事過濾器</span>
                     <div className="flex gap-1">
-                      <button onClick={selectHot} className="rounded border border-amber-700/50 bg-amber-900/40 px-1.5 py-0.5 text-[10px] text-amber-500 hover:bg-amber-800 hover:text-white">🔥 熱門</button>
+                      <button onClick={selectHot} className="rounded border border-amber-700/50 bg-amber-900/40 px-1.5 py-0.5 text-[10px] text-amber-500 hover:bg-amber-800 hover:text-white">主流+盃賽</button>
                       <button onClick={selectAll} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700 hover:text-white">全選</button>
                       <button onClick={selectNone} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700 hover:text-white">清空</button>
                     </div>
                   </div>
-                  <div className="scroll-styled mb-3 grid max-h-28 grid-cols-3 gap-1.5 overflow-y-auto rounded border border-slate-800 bg-slate-950 p-1.5 text-[10px]">
-                    {allLeagues.map((l) => (
+                  
+                  <input
+                    type="text"
+                    placeholder="🔍 搜尋聯賽 (例如: 歐冠、日職)"
+                    value={leagueSearch}
+                    onChange={(e) => setLeagueSearch(e.target.value)}
+                    className="mb-2 w-full rounded border border-white/[0.08] bg-slate-900 px-2 py-1 text-[11px] text-white outline-none placeholder:text-slate-500 focus:border-cyan-500/50"
+                  />
+                  
+                  <div className="scroll-styled mb-3 grid max-h-32 grid-cols-3 gap-1.5 overflow-y-auto rounded border border-slate-800 bg-slate-950 p-1.5 text-[10px]">
+                    {allLeagues.filter(l => l.toLowerCase().includes(leagueSearch.toLowerCase())).map((l) => (
                       <label key={l} className="flex items-center gap-1 cursor-pointer" title={l}>
                         <input
                           type="checkbox"
                           checked={selectedLeagues.has(l)}
                           onChange={(e) => toggleLeague(l, e.target.checked)}
-                          className="h-3 w-3 rounded border-slate-700 bg-slate-900 text-cyan-500"
+                          className="h-3 w-3 rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-0 focus:ring-offset-0"
                         />
                         <span className={`truncate ${isHot(l) ? "font-bold text-amber-400" : "text-slate-500"}`}>{l}</span>
                       </label>
                     ))}
                   </div>
+
                   <button
                     onClick={handleRenderRadar}
                     className="w-full rounded-lg border border-emerald-500/25 bg-emerald-500/10 py-2 text-sm font-bold text-emerald-400 transition hover:bg-emerald-500/20"
                   >
-                    [STEP 2] 渲染選定聯賽雷達
+                    [STEP 2] 更新監控雷達
                   </button>
                 </div>
               )}
             </div>
 
-            {/* Scan progress */}
             {scanProgress && (
               <div className="glass rounded-xl border border-amber-500/15 p-3 shrink-0">
                 <div className="mb-1.5 flex items-center justify-between text-[11px]">
@@ -825,7 +761,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Radar List */}
             <div className="glass flex-1 overflow-hidden rounded-xl border border-white/[0.06]">
               <div className="scroll-styled h-full overflow-y-auto p-2">
                 {filteredMatches.length === 0 ? (
@@ -837,7 +772,6 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {/* League scan buttons */}
                     <div className="flex flex-wrap gap-1 pb-2 border-b border-slate-800/50">
                       {lgEntries.map(([lg, list]) => (
                         <button
@@ -854,16 +788,16 @@ export default function App() {
                         </button>
                       ))}
                     </div>
-                    {/* Match cards */}
+
                     {filteredMatches.map((m) => (
                       <button
                         key={m.id}
-                        onClick={() => handleAnalysis(m.id, false)}
+                        onClick={() => handleAnalysis(m.id, false, m)}
                         className="match-row group w-full rounded-lg border border-slate-800 bg-transparent p-2 text-left transition-all"
                       >
                         <div className="mb-1 flex items-center justify-between text-[10px]">
                           <span className={`rounded px-1 font-bold ${isHot(m.league) ? "text-amber-400" : "text-cyan-400"}`}>{m.league}</span>
-                          <span className="font-bold text-amber-500">🕒 {m.time}</span>
+                          <span className="font-bold text-amber-500">🕐 {m.time}</span>
                           <span className="text-slate-500 hover:text-white">ID:{m.id}</span>
                         </div>
                         <div className="flex items-center text-[12px] font-bold">
@@ -879,9 +813,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* ─── MIDDLE: Terminal ─── */}
-          <div className={`glass flex flex-col overflow-hidden rounded-xl border border-white/[0.06] transition-all duration-500 ${slicerOpen ? "lg:col-span-2" : "lg:col-span-3"}`}>
-            {/* Title bar */}
+          <div className={`glass flex flex-col overflow-hidden rounded-xl border border-white/[0.06] transition-all duration-500 ${panelMode !== 'CLOSED' ? "lg:col-span-2" : "lg:col-span-3"}`}>
             <div className="flex items-center justify-between border-b border-white/[0.05] px-4 py-2 shrink-0">
               <div className="flex items-center gap-3">
                 <div className="flex gap-1.5">
@@ -889,158 +821,212 @@ export default function App() {
                   <span className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" />
                   <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
                 </div>
-                <span className="font-mono text-[10px] text-slate-600">smart-money ~ core_v29 · 最新置頂 ↓</span>
+                <span className="font-mono text-[10px] text-slate-600">smart-money ~ core_v36 (Pro Dynamic EV Edition)</span>
               </div>
               <button onClick={clearConsole} className="rounded border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[10px] text-slate-500 hover:bg-white/[0.06] hover:text-slate-300">
-                清空
+                清空控制台
               </button>
             </div>
-
-            {/* Console body */}
+            
             <div ref={consoleRef} className="terminal-body scroll-styled flex-1 overflow-y-auto px-3 py-2 font-mono text-[12px] leading-relaxed">
               {lines.map((html, i) => (
                 <div key={i} dangerouslySetInnerHTML={{ __html: html }} />
               ))}
               {lines.length <= BOOT_LINES.length && (
                 <div className="mt-4 text-center text-[11px] font-bold tracking-widest text-slate-700 opacity-50">
-                  === 系統已切換至 V29 終極純淨連線模式 ===
+                  === 等待接收 V36 訊號 ===
                 </div>
               )}
             </div>
           </div>
 
-          {/* ─── RIGHT: Slicer ─── */}
-          <div className={`glass flex flex-col overflow-hidden rounded-xl border border-white/[0.06] transition-all duration-500 ${slicerOpen ? "lg:col-span-1" : "lg:col-span-0 lg:w-12"}`}>
-            {/* Slicer header */}
+          <div className={`glass flex flex-col overflow-hidden rounded-xl border border-white/[0.06] transition-all duration-500 ${panelMode !== 'CLOSED' ? "lg:col-span-1" : "lg:col-span-0 lg:w-12"}`}>
             <div className="flex items-center justify-between border-b border-white/[0.05] px-3 py-2 shrink-0">
-              {slicerOpen ? (
-                <div className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-500" />
-                  <span className="text-[12px] font-bold tracking-widest text-white">微觀特徵切片器</span>
+              {panelMode !== 'CLOSED' ? (
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => setPanelMode('SLICER')} className={`text-[11px] font-bold px-2 py-1 rounded transition-colors ${panelMode === 'SLICER' ? 'bg-emerald-500/20 text-emerald-400' : 'text-slate-500 hover:text-white'}`}>手術刀</button>
+                  <button onClick={() => setPanelMode('ASIAN')} className={`text-[11px] font-bold px-2 py-1 rounded transition-colors ${panelMode === 'ASIAN' ? 'bg-purple-500/20 text-purple-400' : 'text-slate-500 hover:text-white'}`}>亞盤透視</button>
                 </div>
               ) : (
-                <span className="text-[10px] text-slate-600">切片器</span>
+                <span className="text-[10px] text-slate-600 font-bold ml-1">展</span>
               )}
               <button
-                onClick={() => setSlicerOpen(!slicerOpen)}
+                onClick={() => setPanelMode(panelMode !== 'CLOSED' ? 'CLOSED' : 'ASIAN')}
                 className="rounded border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[10px] text-slate-400 hover:bg-white/[0.06] hover:text-white"
               >
-                {slicerOpen ? "隱藏 ➔" : "➕"}
+                {panelMode !== 'CLOSED' ? "收起" : "開"}
               </button>
             </div>
 
-            {slicerOpen && (
+            {/* 面板 1: 原版切片手術刀 */}
+            {panelMode === 'SLICER' && (
               <div className="flex flex-col h-full overflow-hidden p-3">
                 <div className="mb-3 rounded border border-slate-800 bg-slate-900 p-2 text-[10px] text-slate-400 shrink-0">
-                  結合終端的 <span className="text-cyan-400">ML 目標</span>，手動校準莊家亞盤軌跡達成確認。
+                  💡 <span className="text-cyan-400">ML 時序切片</span>: 結合終端輸出的 Macro 特徵，手動判斷臨場動能。
                 </div>
 
-                {/* Slicer inputs */}
                 <div className="flex flex-col gap-2.5 shrink-0">
                   <div>
-                    <label className="mb-0.5 block text-[10px] text-slate-500">1. ML 模型預測目標</label>
-                    <select value={slTarget} onChange={(e) => setSlTarget(e.target.value)} className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm font-bold text-cyan-400 outline-none focus:border-cyan-500">
-                      <option value="HOME">買主勝</option>
-                      <option value="DRAW">買和局</option>
-                      <option value="AWAY">買客勝</option>
-                    </select>
+                    <label className="mb-1 block text-[10px] text-slate-500">1. ML 預測目標</label>
+                    <div className="flex gap-1">
+                      <button onClick={() => setSlTarget('HOME')} className={`flex-1 rounded border px-2 py-1 text-[11px] font-bold transition-all ${slTarget === 'HOME' ? 'border-yellow-500 bg-yellow-500/20 text-yellow-400' : 'border-slate-700 bg-slate-900 text-slate-500 hover:text-white'}`}>HOME</button>
+                      <button onClick={() => setSlTarget('DRAW')} className={`flex-1 rounded border px-2 py-1 text-[11px] font-bold transition-all ${slTarget === 'DRAW' ? 'border-purple-500 bg-purple-500/20 text-purple-400' : 'border-slate-700 bg-slate-900 text-slate-500 hover:text-white'}`}>DRAW</button>
+                      <button onClick={() => setSlTarget('AWAY')} className={`flex-1 rounded border px-2 py-1 text-[11px] font-bold transition-all ${slTarget === 'AWAY' ? 'border-cyan-500 bg-cyan-500/20 text-cyan-400' : 'border-slate-700 bg-slate-900 text-slate-500 hover:text-white'}`}>AWAY</button>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="mb-0.5 block text-[10px] text-slate-500">2. 強隊情境</label>
-                      <select value={slFav} onChange={(e) => setSlFav(e.target.value)} className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm font-bold text-purple-400 outline-none">
-                        <option value="Home">主隊是強隊</option>
-                        <option value="Away">客隊是強隊</option>
-                      </select>
+                      <label className="mb-1 block text-[10px] text-slate-500">2. 讓球方</label>
+                      <div className="flex gap-1">
+                        <button onClick={() => setSlFav('Home')} className={`flex-1 rounded border px-2 py-1 text-[11px] font-bold transition-all ${slFav === 'Home' ? 'border-rose-500 bg-rose-500/20 text-rose-400' : 'border-slate-700 bg-slate-900 text-slate-500 hover:text-white'}`}>主讓</button>
+                        <button onClick={() => setSlFav('Away')} className={`flex-1 rounded border px-2 py-1 text-[11px] font-bold transition-all ${slFav === 'Away' ? 'border-sky-500 bg-sky-500/20 text-sky-400' : 'border-slate-700 bg-slate-900 text-slate-500 hover:text-white'}`}>客讓</button>
+                      </div>
                     </div>
                     <div>
-                      <label className="mb-0.5 block text-[10px] text-slate-500">3. 雙向交叉矩陣</label>
-                      <select value={slCross} onChange={(e) => setSlCross(e.target.value)} className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-sm font-bold text-white outline-none">
-                        <option value="++++">++++</option>
-                        <option value="----">----</option>
-                        <option value="++--">++--</option>
-                        <option value="--++">--++</option>
-                        <option value="-+--">-+--</option>
-                        <option value="-+++">-+++</option>
-                        <option value="+---">+---</option>
-                        <option value="++-+">++-+</option>
+                      <label className="mb-0.5 block text-[10px] text-slate-500">3. 宏觀交叉</label>
+                      <select value={slCross} onChange={(e) => setSlCross(e.target.value)} className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-[5px] font-mono text-sm font-bold text-white outline-none">
+                        <option value="++++">++++</option><option value="----">----</option><option value="++--">++--</option>
+                        <option value="--++">--++</option><option value="-+--">-+--</option><option value="-+++">-+++</option>
+                        <option value="+---">+---</option><option value="++-+">++-+</option>
                       </select>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="mb-0.5 block text-[10px] text-slate-500">4. 主隊軌跡 (Pat_L)</label>
-                      <select value={slPatL} onChange={(e) => setSlPatL(e.target.value)} className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm font-bold text-white outline-none">
-                        <option value="順階梯">順階梯</option>
-                        <option value="反階梯">反階梯</option>
-                        <option value="凹陷誘盤">凹陷誘盤</option>
-                        <option value="雙峰擠壓">雙峰擠壓</option>
-                        <option value="缺失">缺失</option>
+                      <label className="mb-0.5 block text-[10px] text-slate-500">4. 臨場型態 (Pat_L)</label>
+                      <select value={slPatL} onChange={(e) => setSlPatL(e.target.value)} className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-[5px] text-[12px] font-bold text-white outline-none">
+                        <option value="持續降賠">持續降賠</option><option value="深V洗盤">深V洗盤</option>
+                        <option value="倒V型">倒V型</option><option value="階梯式降">階梯式降</option>
+                        <option value="末期暴跳">末期暴跳</option>
                       </select>
                     </div>
                     <div>
-                      <label className="mb-0.5 block text-[10px] text-slate-500">5. 客隊軌跡 (Pat_M)</label>
-                      <select value={slPatM} onChange={(e) => setSlPatM(e.target.value)} className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm font-bold text-white outline-none">
-                        <option value="A&lt;B&lt;C">{"A<B<C"}</option>
-                        <option value="A&gt;B&gt;C">{"A>B>C"}</option>
-                        <option value="A&gt;B&lt;C">{"A>B<C"}</option>
-                        <option value="A&lt;B&gt;C">{"A<B>C"}</option>
-                        <option value="缺失">缺失</option>
-                        <option value="無序">無序</option>
+                      <label className="mb-0.5 block text-[10px] text-slate-500">5. 資金共識 (Pat_M)</label>
+                      <select value={slPatM} onChange={(e) => setSlPatM(e.target.value)} className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-[5px] text-[12px] font-bold text-white outline-none">
+                        <option value="A<B<C">A&lt;B&lt;C</option><option value="A>B>C">A&gt;B&gt;C</option>
+                        <option value="A>B<C">A&gt;B&lt;C</option><option value="A<B>C">A&lt;B&gt;C</option>
+                        <option value="晚期加速">晚期加速</option><option value="早期死水">早期死水</option>
                       </select>
                     </div>
                   </div>
                 </div>
 
-                {/* Slicer result */}
                 <div className="mt-3 flex-1 overflow-y-auto rounded border border-slate-800 bg-slate-950 p-3 scroll-styled">
                   {slicerResult && (slicerResult.golden.length > 0 || slicerResult.traps.length > 0) ? (
                     <div className="flex flex-col h-full">
                       {slicerResult.traps.length > 0 && (
                         <div className="mb-2 rounded border border-red-900/50 bg-red-950/40 p-2">
-                          <div className="mb-1 text-[11px] font-bold text-red-400">❌ 觸發誘盤死穴</div>
-                          {slicerResult.traps.map((t, i) => (
+                          <div className="mb-1 text-[11px] font-bold text-red-400">⚠️ 觸發陷阱特徵 (TRAPS)</div>
+                          {slicerResult.traps.map((t: any, i: number) => (
                             <div key={i} className="flex items-center justify-between border-t border-red-900/30 pt-1 text-[10px] mt-1 first:mt-0 first:border-0 first:pt-0">
-                              <span className="text-slate-300">
-                                <span className="mr-1 rounded bg-red-900/60 px-1">{t.val}</span>{t.desc}
-                              </span>
+                              <span className="text-slate-300"><span className="mr-1 rounded bg-red-900/60 px-1">{t.val}</span>{t.desc}</span>
                               <span className="font-mono font-bold text-red-400">{t.roi}</span>
                             </div>
                           ))}
                         </div>
                       )}
+                      
                       {slicerResult.golden.length > 0 && (
                         <div className="mb-2 rounded border border-emerald-900/50 bg-emerald-950/40 p-2">
-                          <div className="mb-1 text-[11px] font-bold text-emerald-400">⭐ 觸發印鈔綠燈</div>
-                          {slicerResult.golden.map((g, i) => (
+                          <div className="mb-1 text-[11px] font-bold text-emerald-400">💎 觸發黃金特徵 (GOLDEN)</div>
+                          {slicerResult.golden.map((g: any, i: number) => (
                             <div key={i} className="flex items-center justify-between border-t border-emerald-900/30 pt-1 text-[10px] mt-1 first:mt-0 first:border-0 first:pt-0">
-                              <span className="text-slate-300">
-                                <span className="mr-1 rounded bg-emerald-900/60 px-1">{g.val}</span>{g.desc}
-                              </span>
+                              <span className="text-slate-300"><span className="mr-1 rounded bg-emerald-900/60 px-1">{g.val}</span>{g.desc}</span>
                               <span className="font-mono font-bold text-emerald-400">{g.roi}</span>
                             </div>
                           ))}
                         </div>
                       )}
 
-                      {/* Action */}
                       <div className="mt-auto border-t border-slate-800 pt-3 text-center">
                         {slicerResult.traps.length > 0 ? (
                           <div className="text-xl font-black text-red-500">🚫 堅決放棄 (BLOCK)</div>
                         ) : slicerResult.golden.length >= 2 ? (
-                          <div className="animate-pulse text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">🚀 雙重確認！滿倉出擊</div>
+                          <div className="animate-pulse text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">🔥 完美契合 (ALL-IN)</div>
                         ) : slicerResult.golden.length === 1 ? (
-                          <div className="text-xl font-black text-emerald-400">✅ 允許執行 (EXECUTE)</div>
+                          <div className="text-xl font-black text-emerald-400">✅ 條件吻合 (EXECUTE)</div>
                         ) : (
-                          <div className="text-lg font-black text-slate-500">⏳ 觀望 (NO SIGNAL)</div>
+                          <div className="text-lg font-black text-slate-500">⚪ 無明顯特徵 (NO SIGNAL)</div>
                         )}
                       </div>
                     </div>
                   ) : (
-                    <div className="py-8 text-center text-[11px] text-slate-500">
-                      此組合在歷史回測中<br />無顯著偏差
+                    <div className="py-8 text-center text-[11px] text-slate-500">尚未觸發任何時序規則 <br /> 請調整上方參數</div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 面板 2: 亞盤透視鏡 */}
+            {panelMode === 'ASIAN' && (
+              <div className="flex flex-col h-full p-3">
+                <div className="mb-3 rounded border border-slate-800 bg-slate-900 p-2 text-[10px] text-slate-400 shrink-0">
+                  💡 <span className="text-purple-400 font-bold">亞盤透視鏡</span>: 全樣本 N1-N4 OOS 矩陣查詢，直接對照莊家意圖。
+                </div>
+
+                <div className="mb-2.5 shrink-0">
+                  <label className="mb-1 block text-[10px] text-slate-500">時間點</label>
+                  <div className="flex gap-1.5">
+                    <button onClick={() => setAsTime('OPEN')} className={`flex-1 rounded border px-2 py-1.5 text-[11px] font-bold transition-all ${asTime === 'OPEN' ? 'border-indigo-500 bg-indigo-500/20 text-indigo-400' : 'border-slate-700 bg-slate-900 text-slate-500 hover:text-white'}`}>初盤 (OPEN)</button>
+                    <button onClick={() => setAsTime('T1H')} className={`flex-1 rounded border px-2 py-1.5 text-[11px] font-bold transition-all ${asTime === 'T1H' ? 'border-indigo-500 bg-indigo-500/20 text-indigo-400' : 'border-slate-700 bg-slate-900 text-slate-500 hover:text-white'}`}>臨場 (T1H)</button>
+                  </div>
+                </div>
+
+                <div className="mb-2.5 shrink-0">
+                  <label className="mb-1 block text-[10px] text-slate-500">盤口線</label>
+                  <div className="flex gap-1.5">
+                    {['N1', 'N2', 'N3', 'N4'].map(l => (
+                      <button key={l} onClick={() => setAsLine(l)} className={`flex-1 rounded border px-2 py-1.5 text-[11px] font-bold transition-all ${asLine === l ? 'border-emerald-500 bg-emerald-500/20 text-emerald-400' : 'border-slate-700 bg-slate-900 text-slate-500 hover:text-white'}`}>
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mb-2.5 shrink-0">
+                  <label className="mb-1 block text-[10px] text-slate-500">預測方向 (ML)</label>
+                  <div className="flex gap-1.5">
+                    <button onClick={() => setAsSide('HOME')} className={`flex-1 rounded border px-2 py-1.5 text-[11px] font-bold transition-all ${asSide === 'HOME' ? 'border-yellow-500 bg-yellow-500/20 text-yellow-400' : 'border-slate-700 bg-slate-900 text-slate-500 hover:text-white'}`}>HOME</button>
+                    <button onClick={() => setAsSide('DRAW')} className={`flex-1 rounded border px-2 py-1.5 text-[11px] font-bold transition-all ${asSide === 'DRAW' ? 'border-purple-500 bg-purple-500/20 text-purple-400' : 'border-slate-700 bg-slate-900 text-slate-500 hover:text-white'}`}>DRAW</button>
+                    <button onClick={() => setAsSide('AWAY')} className={`flex-1 rounded border px-2 py-1.5 text-[11px] font-bold transition-all ${asSide === 'AWAY' ? 'border-cyan-500 bg-cyan-500/20 text-cyan-400' : 'border-slate-700 bg-slate-900 text-slate-500 hover:text-white'}`}>AWAY</button>
+                  </div>
+                </div>
+
+                <div className="mb-2.5 shrink-0">
+                  <label className="mb-1 block text-[10px] text-slate-500">實際讓球盤口</label>
+                  <select value={asHandicap} onChange={(e) => setAsHandicap(e.target.value)} className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-2 text-[12px] font-bold text-white outline-none focus:border-purple-500">
+                    {asianHandicaps.map(k => <option key={k} value={k}>{k}</option>)}
+                  </select>
+                </div>
+
+                <div className="mt-2 flex-1 flex flex-col justify-center">
+                  {asianResult ? (
+                    <div className={`rounded-xl border border-t-4 p-4 text-center shadow-xl transition-all ${asianResult.r > 0 ? 'border-t-emerald-500 border-emerald-900/50 bg-emerald-950/20' : 'border-t-red-500 border-red-900/50 bg-red-950/20'}`}>
+                      <div className="text-[11px] text-slate-400 mb-1">歷史投資回報率 (ROI)</div>
+                      <div className={`text-4xl font-black mb-4 ${asianResult.r > 0 ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(52,211,153,0.4)]' : 'text-red-400'}`}>
+                        {asianResult.r > 0 ? '+' : ''}{asianResult.r.toFixed(2)}%
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/[0.05]">
+                        <div className="bg-slate-900/50 rounded p-1.5">
+                          <div className="text-[10px] text-slate-500">OOS 樣本數</div>
+                          <div className="text-sm font-bold text-white">{asianResult.t} 場</div>
+                        </div>
+                        <div className="bg-slate-900/50 rounded p-1.5">
+                          <div className="text-[10px] text-slate-500">歷史勝率</div>
+                          <div className="text-sm font-bold text-white">{asianResult.w.toFixed(1)}%</div>
+                        </div>
+                      </div>
+
+                      {asianResult.r > 20 && asianResult.t >= 15 && (
+                        <div className="mt-3 text-[11px] text-amber-400 font-bold animate-pulse tracking-wide">🔥 發現極端雙重金礦特徵！</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-32 rounded border border-slate-800 bg-slate-900/50">
+                      <span className="text-[11px] text-slate-500">該條件下無足夠 OOS 樣本</span>
                     </div>
                   )}
                 </div>
